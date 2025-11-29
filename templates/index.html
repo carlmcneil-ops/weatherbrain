@@ -67,8 +67,8 @@
             <h2>Mission planner</h2>
             <div class="card-body">
                 <p class="small">
-                    Checks Te Anau / Moana, Hunter via Lake Hawea, and Waikaia – then tells you
-                    what’s actually worth doing.
+                    Checks Te Anau / Moana, Hunter River via Lake Hawea, and Waikaia – then tells you
+                    what’s actually worth doing over the next 10 days.
                 </p>
 
                 <button id="run-briefing">Run daily briefing</button>
@@ -83,12 +83,12 @@
                         <div id="teanau-text" class="small"></div>
                     </div>
                     <div class="detail-card">
-                        <h3>Hunter via Hawea</h3>
+                        <h3>Hunter River</h3>
                         <div id="hunter-badge" class="badge"></div>
                         <div id="hunter-text" class="small"></div>
                     </div>
                     <div class="detail-card">
-                        <h3>Waikaia – Piano Flat</h3>
+                        <h3>Waikaia</h3>
                         <div id="waikaia-badge" class="badge"></div>
                         <div id="waikaia-text" class="small"></div>
                     </div>
@@ -109,17 +109,16 @@
 </div>
 
 <script>
-    // Verdict → badge CSS class
     function verdictBadgeClass(v) {
         switch (v) {
-            case "go":        return "badge badge-go";
-            case "maybe-go":  return "badge badge-maybe";
-            case "hold":      return "badge badge-hold";
-            default:          return "badge badge-nowindow";
+            case "go": return "badge badge-go";
+            case "maybe-go": return "badge badge-maybe";
+            case "hold": return "badge badge-hold";
+            default: return "badge badge-nowindow";
         }
     }
 
-    // Turn "2025-12-03" into "Wed 3 Dec"
+    // "2025-12-03" -> "Wed 3 Dec"
     function fmtDate(d) {
         const dt = new Date(d);
         const weekday = dt.toLocaleDateString("en-NZ", { weekday: "short" });
@@ -128,41 +127,24 @@
         return `${weekday} ${day} ${month}`;
     }
 
-    // Prettify ISO dates in briefing text (summary + reason fields)
+    // Turn "(2025-12-03 → 2025-12-04)" into "(Wed 3 Dec → Thu 4 Dec)" and bold it
     function prettyWindowText(text) {
         if (!text) return "";
-
-        let out = text;
-
-        // 1) Date ranges with or without brackets:
-        //    "2025-12-03 → 2025-12-04"
-        //    "(2025-12-03 -> 2025-12-04)"
-        out = out.replace(
-            /(\(?)(\d{4}-\d{2}-\d{2})\s*[→\-–—>]\s*(\d{4}-\d{2}-\d{2})(\)?)/g,
-            (match, open, start, end, close) => {
-                return `${open}<strong>${fmtDate(start)} → ${fmtDate(end)}</strong>${close}`;
+        return text.replace(
+            /\((\d{4}-\d{2}-\d{2})\s*[→\-–—>]\s*(\d{4}-\d{2}-\d{2})\)/,
+            (match, start, end) => {
+                const startPretty = fmtDate(start);
+                const endPretty = fmtDate(end);
+                return `(<strong>${startPretty} → ${endPretty}</strong>)`;
             }
         );
-
-        // 2) Single dates with or without brackets:
-        //    "2025-12-04" or "(2025-12-04)"
-        out = out.replace(
-            /(\(?)(\d{4}-\d{2}-\d{2})(\)?)/g,
-            (match, open, date, close) => {
-                return `${open}<strong>${fmtDate(date)}</strong>${close}`;
-            }
-        );
-
-        return out;
     }
 
-    // ---------- Spot forecast ----------
-
     async function runForecast() {
-        const spotId       = document.getElementById("spot-select").value;
-        const days         = parseInt(document.getElementById("days-input").value || "3", 10);
-        const tone         = document.getElementById("tone-select").value;
-        const detail       = document.getElementById("detail-select").value;
+        const spotId = document.getElementById("spot-select").value;
+        const days = parseInt(document.getElementById("days-input").value || "3", 10);
+        const tone = document.getElementById("tone-select").value;
+        const detail = document.getElementById("detail-select").value;
         const windSensitive = document.getElementById("wind-sensitive").checked;
 
         const statusEl = document.getElementById("forecast-status");
@@ -174,14 +156,14 @@
         try {
             const resp = await fetch("/api/forecast", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({
-                    spot_id:       spotId,
-                    days:          days,
-                    tone:          tone,
-                    detail_level:  detail,
-                    wind_sensitive: windSensitive,
-                }),
+                    spot_id: spotId,
+                    days: days,
+                    tone: tone,
+                    detail_level: detail,
+                    wind_sensitive: windSensitive
+                })
             });
 
             if (!resp.ok) {
@@ -195,10 +177,10 @@
 
             const raw = data.narrative || "No narrative returned.";
 
-            // Bold the leading "Friday, 29 November" bit for each paragraph
+            // Bold the day/date part at the start of each paragraph
             outputEl.innerHTML = raw.replace(
-                /^([A-Za-z]+,\s+\d{1,2}\s+[A-Za-z]+)/gm,
-                '<strong class="day-head">$1</strong>'
+                /^([A-Za-z]+,\s\d{1,2}\s[A-Za-z]+)/gm,
+                "<strong class=\"day-head\">$1</strong>"
             );
         } catch (err) {
             statusEl.textContent = "Error talking to backend.";
@@ -206,23 +188,21 @@
         }
     }
 
-    // ---------- Mission planner / daily briefing ----------
-
     async function runBriefing() {
-        const statusEl  = document.getElementById("brief-status");
+        const statusEl = document.getElementById("brief-status");
         const summaryEl = document.getElementById("brief-summary");
 
         const teBadge = document.getElementById("teanau-badge");
-        const teText  = document.getElementById("teanau-text");
+        const teText = document.getElementById("teanau-text");
         const huBadge = document.getElementById("hunter-badge");
-        const huText  = document.getElementById("hunter-text");
+        const huText = document.getElementById("hunter-text");
         const waBadge = document.getElementById("waikaia-badge");
-        const waText  = document.getElementById("waikaia-text");
+        const waText = document.getElementById("waikaia-text");
 
         statusEl.textContent = "Running planner…";
         summaryEl.textContent = "";
         teBadge.textContent = huBadge.textContent = waBadge.textContent = "";
-        teText.textContent  = huText.textContent  = waText.textContent  = "";
+        teText.textContent = huText.textContent = waText.textContent = "";
 
         try {
             const resp = await fetch("/api/daily_briefing?days=10");
@@ -235,38 +215,35 @@
             const data = await resp.json();
             statusEl.textContent = "";
 
-            // Summary – allow bold + formatted dates
+            // Prettify any window in the summary text
             const summaryRaw = data.summary || "";
             summaryEl.innerHTML = prettyWindowText(summaryRaw);
 
-            const te = data.teanau  || {};
-            const hu = data.hunter  || {};
+            const te = data.teanau || {};
+            const hu = data.hunter || {};
             const wa = data.waikaia || {};
 
-            // Te Anau / Moana card
             const teVerdict = te.verdict || "no-window";
             teBadge.className = verdictBadgeClass(teVerdict);
             teBadge.textContent = teVerdict.toUpperCase();
             teText.innerHTML = prettyWindowText(te.reason || "");
 
-            // Hunter via Hawea card
             const huVerdict = hu.verdict || "no-window";
             huBadge.className = verdictBadgeClass(huVerdict);
             huBadge.textContent = huVerdict.toUpperCase();
             huText.innerHTML = prettyWindowText(hu.reason || "");
 
-            // Waikaia card
             const waVerdict = wa.verdict || "no-window";
             waBadge.className = verdictBadgeClass(waVerdict);
             waBadge.textContent = waVerdict.toUpperCase();
             waText.innerHTML = prettyWindowText(wa.reason || "");
+
         } catch (err) {
             statusEl.textContent = "Error talking to backend.";
             console.error(err);
         }
     }
 
-    // Wire up buttons
     document.getElementById("run-forecast").addEventListener("click", runForecast);
     document.getElementById("run-briefing").addEventListener("click", runBriefing);
 </script>
