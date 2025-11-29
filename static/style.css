@@ -1,0 +1,209 @@
+/* ---- Root Theme Variables ---- */
+:root {
+    --bg: #0f1116;
+    --bg-card: #15191f;
+    --bg-card-light: #1a1f26;
+    --text: #e0e6ed;
+    --text-muted: #94a0ad;
+    --accent: #2a7fff;
+    --border: #2b2f36;
+    --success: #36c46f;
+    --warning: #ffb03a;
+    --danger: #e84b4b;
+}
+
+/* ---- Global ---- */
+body {
+    margin: 0;
+    padding: 0;
+    font-family: system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+}
+
+.page {
+    max-width: 1200px;
+    margin: auto;
+    padding: 20px 30px;
+}
+
+/* ---- Header ---- */
+.header h1 {
+    margin: 0;
+    font-weight: 600;
+    font-size: 32px;
+}
+
+.header p {
+    margin: 5px 0 20px;
+    color: var(--text-muted);
+}
+
+/* ---- Layout split ---- */
+.layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px;
+}
+
+@media (max-width: 900px) {
+    .layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ---- Cards ---- */
+.card {
+    background: var(--bg-card);
+    padding: 18px 22px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+.card h2 {
+    margin-top: 0;
+}
+
+/* ---- Forms ---- */
+.form-row,
+.controls-row {
+    margin-bottom: 12px;
+}
+
+.form-row label,
+.controls-row label {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--text-muted);
+}
+
+input,
+select {
+    background: var(--bg-card-light);
+    color: var(--text);
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    width: 100%;
+}
+
+.checkbox-row label {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    cursor: pointer;
+}
+
+/* ---- Buttons ---- */
+button {
+    background: var(--accent);
+    padding: 9px 14px;
+    color: white;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+button:hover {
+    opacity: 0.85;
+}
+
+/* ---- Status + Summary ---- */
+.status {
+    color: var(--warning);
+    margin-bottom: 10px;
+}
+
+.summary-block {
+    margin-bottom: 18px;
+    padding: 10px;
+    border-radius: 6px;
+    background: var(--bg-card-light);
+}
+
+/* ---- Detail Cards (Te Anau, Hunter, Waikaia) ---- */
+.details-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px;
+}
+
+@media (max-width: 900px) {
+    .details-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.detail-card {
+    background: var(--bg-card-light);
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+}
+
+/* ---- Verdict Badges ---- */
+.badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.badge-go {
+    background: #1e4f2d;
+    color: var(--success);
+}
+
+.badge-maybe {
+    background: #4a3d1a;
+    color: var(--warning);
+}
+
+.badge-hold {
+    background: #3c2f1b;
+    color: #d38b30;
+}
+
+.badge-nowindow {
+    background: #4a2222;
+    color: var(--danger);
+}
+
+/* ---- Narrative ---- */
+.forecast-output {
+    white-space: pre-wrap;
+    line-height: 1.4;
+    background: var(--bg-card-light);
+    padding: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+}
+
+/* ---- Small muted text ---- */
+.small {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.form-row {
+  margin-bottom: 10px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+
+.day-head {
+    font-weight: 700;
+    color: #fff;
+    background: #444;
+    padding: 3px 6px;
+    border-radius: 4px;
+}
+

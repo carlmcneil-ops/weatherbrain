@@ -1,0 +1,22 @@
+# macOS bullshit
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+.env
+venv/
+.venv/
+
+# Editor configs
+.vscode/
+.idea/
+
+# Byte compiled
+*.pyo
+*.pyd
+
+# Logs
+*.log
