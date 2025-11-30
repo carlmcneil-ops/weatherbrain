@@ -59,10 +59,16 @@
 
                 <button id="run-forecast">Get forecast</button>
                 <div id="forecast-status" class="status small"></div>
+
+                <!-- Forecast output now lives INSIDE the left card -->
+                <hr>
+                <div id="forecast-output" class="forecast-output small">
+                    Pick a spot and hit "Get forecast".
+                </div>
             </div>
         </div>
 
-        <!-- RIGHT: Mission planner -->
+        <!-- RIGHT: Mission planner (+ caravan) -->
         <div class="card">
             <h2>Mission planner</h2>
             <div class="card-body">
@@ -93,22 +99,30 @@
                         <div id="waikaia-text" class="small"></div>
                     </div>
                 </div>
-            </div>
-        </div>
-    </div>
 
-    <!-- Forecast output card -->
-    <div class="card" style="margin-top: 20px;">
-        <h2>Forecast output</h2>
-        <div class="card-body">
-            <div id="forecast-output" class="forecast-output small">
-                Pick a spot and hit "Get forecast", or run the daily briefing.
+                <hr>
+
+                <!-- Caravan Mode lives INSIDE the mission planner card -->
+                <section id="caravan-card">
+                    <h3>Caravan Mode</h3>
+                    <p class="small" id="caravan-description">
+                        <!-- Filled by JS so it always matches the query params -->
+                    </p>
+                    <button id="caravan-check-btn" type="button">
+                        Check caravan windows
+                    </button>
+                    <div id="caravan-output" class="small" style="margin-top: 0.75rem;">
+                        No caravan scan yet.
+                    </div>
+                </section>
             </div>
         </div>
     </div>
 </div>
 
 <script>
+    // ---------- Shared helpers ----------
+
     function verdictBadgeClass(v) {
         switch (v) {
             case "go": return "badge badge-go";
@@ -130,15 +144,30 @@
     // Turn "(2025-12-03 → 2025-12-04)" into "(Wed 3 Dec → Thu 4 Dec)" and bold it
     function prettyWindowText(text) {
         if (!text) return "";
-        return text.replace(
-            /\((\d{4}-\d{2}-\d{2})\s*[→\-–—>]\s*(\d{4}-\d{2}-\d{2})\)/,
+
+        // Ranges like "(2025-12-03 → 2025-12-04)"
+        text = text.replace(
+            /\((\d{4}-\d{2}-\d{2})\s*[→\-–—>]\s*(\d{4}-\d{2}-\d{2})\)/g,
             (match, start, end) => {
                 const startPretty = fmtDate(start);
                 const endPretty = fmtDate(end);
                 return `(<strong>${startPretty} → ${endPretty}</strong>)`;
             }
         );
+
+        // Single dates like "(2025-12-09)"
+        text = text.replace(
+            /\((\d{4}-\d{2}-\d{2})\)/g,
+            (match, singleDate) => {
+                const pretty = fmtDate(singleDate);
+                return `(<strong>${pretty}</strong>)`;
+            }
+        );
+
+        return text;
     }
+
+    // ---------- Spot forecast ----------
 
     async function runForecast() {
         const spotId = document.getElementById("spot-select").value;
@@ -177,16 +206,23 @@
 
             const raw = data.narrative || "No narrative returned.";
 
-            // Bold the day/date part at the start of each paragraph
+            // Bold the day/date part at the start of each paragraph.
+            // Handles:
+            //   - "Sunday, 30 November"
+            //   - "Sunday 30 November"
+            //   - "Sunday, November 30"
+            //   - "Sunday November 30"
             outputEl.innerHTML = raw.replace(
-                /^([A-Za-z]+,\s\d{1,2}\s[A-Za-z]+)/gm,
-                "<strong class=\"day-head\">$1</strong>"
+                /^([A-Za-z]+,?\s+(?:\d{1,2}\s+[A-Za-z]+|[A-Za-z]+\s+\d{1,2}))/gm,
+                '<strong class="day-head">$1</strong>'
             );
         } catch (err) {
             statusEl.textContent = "Error talking to backend.";
             console.error(err);
         }
     }
+
+    // ---------- Daily briefing (mission planner cards) ----------
 
     async function runBriefing() {
         const statusEl = document.getElementById("brief-status");
@@ -244,8 +280,112 @@
         }
     }
 
-    document.getElementById("run-forecast").addEventListener("click", runForecast);
-    document.getElementById("run-briefing").addEventListener("click", runBriefing);
+    // ---------- Caravan Mode (uses /api/caravan) ----------
+
+    const CARAVAN_DAYS = 7;
+    const CARAVAN_MIN_NIGHTS = 2;
+
+    async function fetchCaravanWindows() {
+        const output = document.getElementById("caravan-output");
+        output.textContent = "Checking caravan windows…";
+
+        try {
+            const res = await fetch(`/api/caravan?days=${CARAVAN_DAYS}&min_nights=${CARAVAN_MIN_NIGHTS}`);
+            if (!res.ok) {
+                output.textContent = `Error from server: ${res.status}`;
+                return;
+            }
+
+            const data = await res.json();
+            const windows = data.windows || [];
+
+            if (!windows.length) {
+                output.textContent =
+                    "No decent caravan windows in the next few days. Stay home, tie flies.";
+                return;
+            }
+
+            // Take the best window (first in the sorted list)
+            const w = windows[0];
+
+            const startPretty = fmtDate(w.start_date);
+            const endPretty = fmtDate(w.end_date);
+            const nights = w.nights;
+
+            const titleLine =
+                `<strong>${w.region_name}</strong> – ` +
+                `${nights} night${nights === 1 ? "" : "s"} look mint ` +
+                `(<strong>${startPretty} → ${endPretty}</strong>)`;
+
+            const campBits = new Set();
+            const groundBits = new Set();
+            const towBits = new Set();
+
+            (w.days || []).forEach(d => {
+                (d.notes || []).forEach(n => {
+                    if (n.startsWith("Camp:")) {
+                        campBits.add(n.replace("Camp:", "").trim());
+                    } else if (n.startsWith("Ground:")) {
+                        groundBits.add(n.replace("Ground:", "").trim());
+                    } else if (n.startsWith("Towing:") || n.startsWith("Gusts:")) {
+                        towBits.add(n.trim());
+                    }
+                });
+            });
+
+            const campText = campBits.size
+                ? Array.from(campBits).join(", ")
+                : "Conditions at camp look fine.";
+
+            const groundText = groundBits.size
+                ? Array.from(groundBits).join(", ")
+                : "";
+
+            const towText = towBits.size
+                ? Array.from(towBits).join(" / ")
+                : "Towing looks easy the whole route.";
+
+            const lines = [];
+            lines.push(titleLine);
+            lines.push(`<strong>Camp:</strong> ${campText}`);
+            if (groundText) {
+                lines.push(`<strong>Ground:</strong> ${groundText}`);
+            }
+            lines.push(`<strong>Travel:</strong> ${towText}`);
+
+            output.innerHTML = lines.join("<br>");
+        } catch (err) {
+            console.error(err);
+            output.textContent = "Could not talk to the caravan engine. Is the server running?";
+        }
+    }
+
+    // ---------- Wire up buttons & caravan description ----------
+
+    document.addEventListener("DOMContentLoaded", () => {
+        const btnForecast = document.getElementById("run-forecast");
+        if (btnForecast) {
+            btnForecast.addEventListener("click", runForecast);
+        }
+
+        const btnBrief = document.getElementById("run-briefing");
+        if (btnBrief) {
+            btnBrief.addEventListener("click", runBriefing);
+        }
+
+        const btnCaravan = document.getElementById("caravan-check-btn");
+        if (btnCaravan) {
+            btnCaravan.addEventListener("click", fetchCaravanWindows);
+        }
+
+        const caravanDesc = document.getElementById("caravan-description");
+        if (caravanDesc) {
+            caravanDesc.textContent =
+                `Scans the next ${CARAVAN_DAYS} days for ` +
+                `${CARAVAN_MIN_NIGHTS}+ night caravan windows ` +
+                `within your predefined regions.`;
+        }
+    });
 </script>
 </body>
 </html>

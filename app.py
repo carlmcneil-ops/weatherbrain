@@ -18,6 +18,8 @@ from scoring import (
     evaluate_waikaia_trip,
 )
 from spots import SPOTS as SPOT_LIST  # your list
+from caravan_api import router as caravan_router
+
 
 # Turn list-of-spots into id -> spot dict
 SPOTS: Dict[str, Dict[str, Any]] = {spot["id"]: spot for spot in SPOT_LIST}
@@ -26,6 +28,9 @@ app = FastAPI(title="Fishing Weather Bot")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+
+# Register caravan endpoints
+app.include_router(caravan_router)
 
 # ------------- OpenAI client -------------
 

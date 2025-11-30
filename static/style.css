@@ -1,224 +1,241 @@
-/* Global reset-ish */
+:root {
+    --bg: #0b1015;
+    --card-bg: #151a22;
+    --card-border: #252b36;
+    --accent: #f4c542;
+    --accent-soft: #2b364a;
+    --text: #f5f5f5;
+    --text-muted: #b0b7c5;
+    --danger: #b00020;
+    --go: #1b8e3f;
+    --maybe: #e0a020;
+    --hold: #555555;
+}
+
 * {
     box-sizing: border-box;
 }
 
 body {
     margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    background: #0f1115;
-    color: #f5f5f5;
+    padding: 0;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: radial-gradient(circle at top, #151b24 0, #05070a 55%, #000 100%);
+    color: var(--text);
 }
 
-/* Layout */
 .page {
     max-width: 1100px;
     margin: 0 auto;
-    padding: 20px;
+    padding: 24px 16px 40px;
 }
 
 .header {
-    margin-bottom: 20px;
+    margin-bottom: 16px;
 }
 
 .header h1 {
-    margin: 0 0 4px 0;
+    margin: 0 0 4px;
     font-size: 28px;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.03em;
 }
 
 .header p {
     margin: 0;
-    color: #aaa;
+    color: var(--text-muted);
     font-size: 14px;
 }
 
+/* Layout: left/right cards */
 .layout {
-    display: flex;
-    gap: 20px;
+    display: grid;
+    grid-template-columns: 1.1fr 1.3fr;
+    gap: 16px;
     align-items: flex-start;
-    flex-wrap: wrap;
 }
 
 /* Cards */
+
 .card {
-    background: #191c22;
-    border-radius: 12px;
-    padding: 16px 18px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-    flex: 1 1 0;
-    min-width: 320px;
+    background: rgba(10, 14, 22, 0.96);
+    border-radius: 10px;
+    border: 1px solid rgba(70, 80, 100, 0.7);
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.6);
+    padding: 12px 14px 14px;
 }
 
 .card h2 {
-    margin: 0 0 10px 0;
-    font-size: 20px;
+    margin: 0 0 4px;
+    font-size: 18px;
+    letter-spacing: 0.03em;
 }
 
 .card-body {
-    font-size: 14px;
-}
-
-.small {
-    font-size: 13px;
-    line-height: 1.35;
+    margin-top: 6px;
 }
 
 /* Form controls */
+
 .form-row {
     display: flex;
     flex-direction: column;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
 }
 
 .form-row label {
     font-size: 13px;
-    margin-bottom: 4px;
-    color: #c5c5c5;
-}
-
-.form-row input[type="number"],
-.form-row select {
-    background: #101218;
-    border: 1px solid #333844;
-    color: #f5f5f5;
-    border-radius: 8px;
-    padding: 6px 8px;
-    font-size: 14px;
+    margin-bottom: 3px;
+    color: var(--text-muted);
 }
 
 .checkbox-label {
+    font-size: 13px;
+    color: var(--text-muted);
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 13px;
+    margin-top: 2px;
 }
 
-.checkbox-label input {
-    transform: scale(1.05);
+input[type="number"],
+select {
+    background: #0f131a;
+    border-radius: 6px;
+    border: 1px solid #3a4252;
+    color: var(--text);
+    padding: 4px 8px;
+    font-size: 14px;
 }
 
-/* Buttons */
 button {
-    display: inline-block;
     margin-top: 6px;
-    padding: 7px 12px;
+    padding: 6px 12px;
     border-radius: 999px;
     border: none;
-    background: #2a7bff;
-    color: #fff;
-    font-size: 14px;
     cursor: pointer;
-    transition: background 0.15s ease, transform 0.1s ease;
+    background: linear-gradient(135deg, #f4c542, #e2951b);
+    color: #111;
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
 }
 
 button:hover {
-    background: #3d8cff;
-    transform: translateY(-1px);
+    filter: brightness(1.05);
 }
 
-button:active {
-    transform: translateY(0);
-}
+/* Status + small text */
 
-/* Status text */
 .status {
-    margin-top: 6px;
-    color: #bbb;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
 }
 
-/* Forecast output */
-.forecast-output {
-    white-space: pre-line;
-    font-size: 14px;
-    line-height: 1.4;
+.small {
+    font-size: 13px;
+    line-height: 1.3;
 }
 
-.day-head {
-    font-weight: 700;
-    color: #fff;
-    background: #333a46;
-    padding: 2px 6px;
-    border-radius: 4px;
-}
+/* Summary block (top text in Mission planner) */
 
-/* Mission planner */
 .summary-block {
-    margin-top: 10px;
-    margin-bottom: 8px;
-    line-height: 1.35;
+    margin-top: 6px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(23, 29, 40, 0.9);
 }
+
+/* Mission planner detail grid */
 
 .details-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 10px;
-    margin-top: 12px;
+    margin-top: 10px;
 }
 
 .detail-card {
-    background: #141821;
-    border-radius: 10px;
-    padding: 10px 11px;
-    font-size: 14px;
+    background: rgba(10, 13, 20, 0.95);
+    border-radius: 8px;
+    border: 1px solid rgba(70, 80, 100, 0.7);
+    padding: 8px;
 }
 
-/* Tight headings so they don't wrap awkwardly */
 .detail-card h3 {
-    margin: 0 0 4px 0;
-    font-size: 15px;
-    font-weight: 600;
-    line-height: 1.1;
+    margin: 0 0 4px;
+    font-size: 14px;
     white-space: nowrap;
 }
 
-/* Text inside mission cards (this is where double-spacing was annoying) */
+/* The text block inside each mission card */
 .detail-card .small {
     font-size: 13px;
-    line-height: 1.35;
+    line-height: 1.28;
     margin-top: 4px;
 }
 
 /* Badges */
+
 .badge {
     display: inline-block;
+    margin-top: 2px;
     padding: 2px 8px;
     border-radius: 999px;
     font-size: 11px;
-    font-weight: 600;
-    margin-bottom: 2px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
 }
 
-/* Verdict colour coding */
+/* GO = green */
 .badge-go {
-    background: #1f8b4c;
-    color: #eafff5;
+    background: var(--go);
+    color: #fff;
 }
 
+/* MAYBE = amber */
 .badge-maybe {
-    background: #8a6d1f;
-    color: #fff7d9;
+    background: var(--maybe);
+    color: #111;
 }
 
+/* HOLD = grey */
 .badge-hold {
-    background: #5a5a5a;
-    color: #f0f0f0;
+    background: var(--hold);
+    color: #f5f5f5;
 }
 
+/* NO-WINDOW = red */
 .badge-nowindow {
-    background: #3c3c3c;
-    color: #cccccc;
+    background: var(--danger);
+    color: #fff;
 }
 
-/* Responsive tweaks */
+/* Forecast output */
+
+.forecast-output {
+    margin-top: 4px;
+    white-space: pre-wrap;
+    font-size: 13px;
+    line-height: 1.35;
+    color: var(--text-muted);
+}
+
+/* Bold day headings in forecast text */
+
+.day-head {
+    font-weight: 700;
+    color: #fff;
+    background: #333;
+    padding: 2px 5px;
+    border-radius: 3px;
+}
+
+/* Responsive tweak */
+
 @media (max-width: 900px) {
-    .details-grid {
-        grid-template-columns: 1fr;
-    }
-}
-
-@media (max-width: 700px) {
     .layout {
-        flex-direction: column;
+        grid-template-columns: 1fr;
     }
 }
