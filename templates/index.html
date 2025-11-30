@@ -208,14 +208,29 @@
 
             // Bold the day/date part at the start of each paragraph.
             // Handles:
+            //   - "Sunday (Nov 30)"
             //   - "Sunday, 30 November"
             //   - "Sunday 30 November"
             //   - "Sunday, November 30"
             //   - "Sunday November 30"
-            outputEl.innerHTML = raw.replace(
-                /^([A-Za-z]+,?\s+(?:\d{1,2}\s+[A-Za-z]+|[A-Za-z]+\s+\d{1,2}))/gm,
-                '<strong class="day-head">$1</strong>'
-            );
+            //   - plain "Friday" / "Saturday" on their own line
+            outputEl.innerHTML = raw
+                // New style: "Sunday (Nov 30)"
+                .replace(
+                    /^([A-Za-z]+(?:\s*\([A-Za-z]{3}\s+\d{1,2}\)))/gm,
+                    '<strong class="day-head">$1</strong>'
+                )
+                // Older styles with explicit date text
+                .replace(
+                    /^([A-Za-z]+,?\s+(?:\d{1,2}\s+[A-Za-z]+|[A-Za-z]+\s+\d{1,2}))/gm,
+                    '<strong class="day-head">$1</strong>'
+                )
+                // Plain weekday headings like "Friday" on their own line
+                .replace(
+                    /^([A-Za-z]+)\s*$/gm,
+                    '<strong class="day-head">$1</strong>'
+                );
+
         } catch (err) {
             statusEl.textContent = "Error talking to backend.";
             console.error(err);
@@ -251,7 +266,7 @@
             const data = await resp.json();
             statusEl.textContent = "";
 
-            // Prettify any window in the summary text
+            // Prettify any window or dates in the summary text
             const summaryRaw = data.summary || "";
             summaryEl.innerHTML = prettyWindowText(summaryRaw);
 
