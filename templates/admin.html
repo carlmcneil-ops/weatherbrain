@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WeatherBrain Admin</title>
+  <link rel="stylesheet" href="/static/style.css">
+
+  <style>
+    body {
+      margin: 0;
+      background: #0b1015;
+      font-family: system-ui, -apple-system, sans-serif;
+      color: #f5f5f5;
+    }
+
+    .page {
+      max-width: 960px;
+      margin: 24px auto 40px;
+      padding: 12px;
+    }
+
+    h1 {
+      margin: 0 0 4px;
+      font-size: 24px;
+      letter-spacing: 0.03em;
+    }
+
+    .subhead {
+      margin: 0 0 18px;
+      font-size: 13px;
+      color: #b0b7c5;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .toolbar-left span {
+      font-size: 12px;
+      color: #b0b7c5;
+    }
+
+    .btn {
+      padding: 7px 14px;
+      border-radius: 999px;
+      border: none;
+      cursor: pointer;
+      background: linear-gradient(135deg, #f4c542, #e2951b);
+      color: #111;
+      font-weight: 600;
+      font-size: 12px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .btn.secondary {
+      background: #222837;
+      color: #f5f5f5;
+      border: 1px solid #3a4252;
+    }
+
+    .btn:hover {
+      filter: brightness(1.05);
+    }
+
+    #status {
+      margin-top: 6px;
+      font-size: 12px;
+    }
+
+    #status.ok { color: #1b8e3f; }
+    #status.err { color: #b00020; }
+
+    /* Region + activity cards */
+
+    .region-block {
+      background: rgba(10, 14, 22, 0.96);
+      border: 1px solid #3a4252;
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 18px;
+    }
+
+    .region-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .region-title {
+      font-size: 17px;
+      font-weight: 600;
+    }
+
+    .region-key {
+      font-size: 11px;
+      color: #7c8597;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .activity-block {
+      background: rgba(23, 29, 40, 0.9);
+      padding: 10px 12px;
+      border-radius: 6px;
+      margin-top: 10px;
+      border: 1px solid rgba(58, 66, 82, 0.8);
+    }
+
+    .activity-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .activity-title {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .activity-key {
+      font-size: 11px;
+      color: #7c8597;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .fields-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px 12px;
+      margin-bottom: 8px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .field label {
+      font-size: 11px;
+      color: #b0b7c5;
+      margin-bottom: 2px;
+    }
+
+    .field input {
+      width: 100%;
+      background: #0f131a;
+      border-radius: 6px;
+      border: 1px solid #3a4252;
+      color: #fff;
+      padding: 4px 8px;
+      font-size: 13px;
+    }
+
+    .field input:focus {
+      outline: none;
+      border-color: #f4c542;
+    }
+
+    .notes-field {
+      margin-top: 6px;
+    }
+
+    .notes-field textarea {
+      width: 100%;
+      background: #0f131a;
+      border-radius: 6px;
+      border: 1px solid #3a4252;
+      color: #fff;
+      padding: 5px 8px;
+      font-size: 13px;
+      min-height: 52px;
+      resize: vertical;
+    }
+
+    .notes-field textarea:focus {
+      outline: none;
+      border-color: #f4c542;
+    }
+
+    @media (max-width: 800px) {
+      .fields-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+
+<body>
+<div class="page">
+  <h1>WeatherBrain Scoring Admin</h1>
+  <p class="subhead">
+    Tweak the expedition window length and GO / MAYBE thresholds for each mission.
+  </p>
+
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <span>Editing: scoring_config.json</span>
+      <div id="status"></div>
+    </div>
+    <div class="toolbar-right">
+      <a href="/" class="btn secondary">Back to Weather Brain</a>
+      <button class="btn secondary" id="reload-btn">Reload from file</button>
+      <button class="btn" id="save-btn">Save all changes</button>
+    </div>
+  </div>
+
+  <div id="container"></div>
+</div>
+
+  <div id="container"></div>
+</div>
+
+<script>
+let config = {};
+
+// ------------- Helpers -------------
+
+function setDeep(path, value) {
+  const keys = path.split(".");
+  let obj = config;
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (!obj || typeof obj !== "object") return;
+    obj = obj[keys[i]];
+  }
+  if (!obj || typeof obj !== "object") return;
+  obj[keys[keys.length - 1]] = value;
+}
+
+// ------------- Render UI -------------
+
+function renderConfig() {
+  const container = document.getElementById("container");
+  container.innerHTML = "";
+
+  if (!config || !config.regions) {
+    container.innerHTML = "<p>No regions found in config.</p>";
+    return;
+  }
+
+  Object.entries(config.regions).forEach(([regionKey, regionData]) => {
+    const regionDiv = document.createElement("div");
+    regionDiv.className = "region-block";
+
+    const regionHeader = document.createElement("div");
+    regionHeader.className = "region-header";
+    regionHeader.innerHTML = `
+      <div class="region-title">${regionData.label || regionKey}</div>
+      <div class="region-key">${regionKey}</div>
+    `;
+    regionDiv.appendChild(regionHeader);
+
+    const activities = regionData.activities || {};
+    Object.entries(activities).forEach(([actKey, act]) => {
+      const actDiv = document.createElement("div");
+      actDiv.className = "activity-block";
+
+      const actHeader = document.createElement("div");
+      actHeader.className = "activity-header";
+      actHeader.innerHTML = `
+        <div class="activity-title">${act.label || actKey}</div>
+        <div class="activity-key">${actKey}</div>
+      `;
+      actDiv.appendChild(actHeader);
+
+      const grid = document.createElement("div");
+      grid.className = "fields-grid";
+
+      grid.innerHTML = `
+        <div class="field">
+          <label>Window min days</label>
+          <input type="number" min="1" max="10"
+                 value="${act.window_min_length ?? ''}"
+                 data-path="regions.${regionKey}.activities.${actKey}.window_min_length">
+        </div>
+
+        <div class="field">
+          <label>GO threshold</label>
+          <input type="number" min="0" max="100"
+                 value="${act.go_threshold ?? ''}"
+                 data-path="regions.${regionKey}.activities.${actKey}.go_threshold">
+        </div>
+
+        <div class="field">
+          <label>Maybe threshold</label>
+          <input type="number" min="0" max="100"
+                 value="${act.maybe_threshold ?? ''}"
+                 data-path="regions.${regionKey}.activities.${actKey}.maybe_threshold">
+        </div>
+      `;
+
+      actDiv.appendChild(grid);
+
+      const notesField = document.createElement("div");
+      notesField.className = "notes-field";
+      notesField.innerHTML = `
+        <label style="font-size:11px;color:#b0b7c5;margin-bottom:2px;">Notes</label>
+        <textarea data-path="regions.${regionKey}.activities.${actKey}.notes">${
+          act.notes || ""
+        }</textarea>
+      `;
+      actDiv.appendChild(notesField);
+
+      regionDiv.appendChild(actDiv);
+    });
+
+    container.appendChild(regionDiv);
+  });
+}
+
+// ------------- Load config from backend -------------
+
+async function loadConfig() {
+  const statusEl = document.getElementById("status");
+  statusEl.textContent = "Loading…";
+  statusEl.className = "";
+
+  try {
+    const res = await fetch("/api/admin/config");
+    if (!res.ok) {
+      const txt = await res.text();
+      statusEl.textContent = "Failed to load config: " + txt;
+      statusEl.className = "err";
+      return;
+    }
+
+    config = await res.json();
+    renderConfig();
+    statusEl.textContent = "Config loaded.";
+    statusEl.className = "ok";
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "Error loading config.";
+    statusEl.className = "err";
+  }
+}
+
+// ------------- Save config to backend -------------
+
+async function saveConfig() {
+  const statusEl = document.getElementById("status");
+  statusEl.textContent = "Saving…";
+  statusEl.className = "";
+
+  // Push all inputs/textareas back into `config`
+  document.querySelectorAll("[data-path]").forEach(el => {
+    const path = el.getAttribute("data-path");
+    const raw = el.value;
+
+    // If it looks like a number, store it as a number; otherwise as a string
+    const num = Number(raw);
+    const val = Number.isNaN(num) ? raw : num;
+    setDeep(path, val);
+  });
+
+  try {
+    const res = await fetch("/api/admin/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+    });
+
+    if (res.ok) {
+      statusEl.textContent = "Saved successfully.";
+      statusEl.className = "ok";
+    } else {
+      const txt = await res.text();
+      statusEl.textContent = "Save failed: " + txt;
+      statusEl.className = "err";
+    }
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "Error saving config.";
+    statusEl.className = "err";
+  }
+}
+
+// ------------- Wire up buttons -------------
+
+document.addEventListener("DOMContentLoaded", () => {
+  const saveBtn = document.getElementById("save-btn");
+  const reloadBtn = document.getElementById("reload-btn");
+
+  if (saveBtn) saveBtn.addEventListener("click", saveConfig);
+  if (reloadBtn) reloadBtn.addEventListener("click", loadConfig);
+
+  loadConfig();
+});
+</script>
+</body>
+</html>

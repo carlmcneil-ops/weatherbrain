@@ -212,27 +212,53 @@ button:hover {
     color: #fff;
 }
 
-/* Forecast output */
+/* ---------------- Forecast output ---------------- */
 
 .forecast-output {
     margin-top: 4px;
-    white-space: pre-wrap;
     font-size: 13px;
-    line-height: 1.35;
+    line-height: 1.4;
     color: var(--text-muted);
+    white-space: normal;      /* we’re using <p> tags, no pre-wrap */
 }
 
-/* Bold day headings in forecast text */
+/* Generic forecast paragraphs (body text + final summary) */
+.forecast-output p {
+    margin: 0 0 8px 0;         /* tight spacing, no top margin */
+}
 
-.day-head {
-    font-weight: 700;
+/* Each day block wrapper – clean gap between days */
+.forecast-output .day-block {
+    margin: 12px 0 0 0;
+}
+
+.forecast-output .day-block:first-child {
+    margin-top: 8px;
+}
+
+/* Grey “date pill” heading for each day */
+.forecast-output .day-head {
+    display: inline-block;
+    padding: 4px 12px;
+    background: #444;
     color: #fff;
-    background: #333;
-    padding: 2px 5px;
-    border-radius: 3px;
+    border-radius: 6px;
+    font-weight: 600;
+    line-height: 1.2;
+    margin-bottom: 6px;        /* small gap down to the paragraph */
 }
 
-/* Responsive tweak */
+/* Paragraphs inside a day block: no extra margin on top */
+.forecast-output .day-block p {
+    margin: 0 0 8px 0;
+}
+
+/* Final summary paragraph (not in a day-block) – small cushion above */
+.forecast-output > p:last-child {
+    margin-top: 12px;
+}
+
+/* ---------------- Responsive tweak ---------------- */
 
 @media (max-width: 900px) {
     .layout {

@@ -4,12 +4,95 @@
     <meta charset="UTF-8">
     <title>Weather Brain – Carl’s Weather PA</title>
     <link rel="stylesheet" href="/static/style.css">
+
+    <!-- Modal styles only (do not touch existing layout / buttons) -->
+    <style>
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.65);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+
+      .modal-card {
+        background: #0b1015;
+        border-radius: 12px;
+        border: 1px solid #3a4252;
+        max-width: 720px;
+        width: 90%;
+        max-height: 80vh;
+        padding: 16px 20px;
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.6);
+        overflow-y: auto;
+      }
+
+      .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+
+      .modal-header h2 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .modal-close {
+        border: none;
+        background: transparent;
+        color: #b0b7c5;
+        font-size: 20px;
+        cursor: pointer;
+      }
+
+      .modal-close:hover {
+        color: #ffffff;
+      }
+
+      .modal-body p {
+        font-size: 14px;
+        line-height: 1.5;
+        color: #d0d4de;
+      }
+
+      .modal-body h3 {
+        margin-top: 14px;
+        margin-bottom: 6px;
+        font-size: 15px;
+        font-weight: 600;
+      }
+
+      .modal-body ul {
+        margin: 6px 0 10px 18px;
+        padding: 0;
+        font-size: 14px;
+        color: #d0d4de;
+      }
+
+      .modal-body li {
+        margin-bottom: 4px;
+      }
+
+      .hidden {
+        display: none;
+      }
+    </style>
 </head>
 <body>
-<div class="page">
+  <div class="page">
     <div class="header">
-        <h1>Weather Brain</h1>
-        <p>Your smart weather PA for boating, fishing and camping.</p>
+      <h1>Weather Brain</h1>
+      <p>Your smart weather PA for boating, fishing and camping.</p>
+
+      <p class="small">
+        <button id="about-btn" class="btn">ABOUT WEATHER BRAIN</button>
+        <a href="/admin" class="btn">SCORING ADMIN</a>
+      </p>
     </div>
 
     <div class="layout">
@@ -60,7 +143,6 @@
                 <button id="run-forecast">Get forecast</button>
                 <div id="forecast-status" class="status small"></div>
 
-                <!-- Forecast output now lives INSIDE the left card -->
                 <hr>
                 <div id="forecast-output" class="forecast-output small">
                     Pick a spot and hit "Get forecast".
@@ -102,12 +184,10 @@
 
                 <hr>
 
-                <!-- Caravan Mode lives INSIDE the mission planner card -->
+                <!-- Caravan Mode -->
                 <section id="caravan-card">
                     <h3>Caravan Mode</h3>
-                    <p class="small" id="caravan-description">
-                        <!-- Filled by JS so it always matches the query params -->
-                    </p>
+                    <p class="small" id="caravan-description"></p>
                     <button id="caravan-check-btn" type="button">
                         Check caravan windows
                     </button>
@@ -118,7 +198,7 @@
             </div>
         </div>
     </div>
-</div>
+  </div>
 
 <script>
     // ---------- Shared helpers ----------
@@ -167,6 +247,85 @@
         return text;
     }
 
+    // ---------- Forecast formatting (day blocks, tidy spacing) ----------
+
+    function formatForecastNarrative(raw) {
+        if (!raw) return "";
+
+        const lines = raw.split(/\r?\n/);
+        const blocks = [];
+        let current = null;
+        let skippedTitle = false;
+
+        // Matches: "Tuesday, December 2nd" / "Wednesday, December 3rd" etc
+        const headingRegex =
+            /^([A-Za-z]+,\s+[A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?)\b(.*)$/;
+
+        for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+
+            // Markdown headings like **Lake Wanaka – Paddock Bay Fishing Forecast**
+            const mdMatch = line.match(/^\*\*(.+?)\*\*$/);
+            if (mdMatch) {
+                if (!skippedTitle) {
+                    // First markdown heading is the overall title – skip it.
+                    skippedTitle = true;
+                } else {
+                    // If the model ever gives **December 2nd** style headings,
+                    // treat them as a new day block.
+                    const headingText = mdMatch[1].trim();
+                    current = { heading: headingText, chunks: [] };
+                    blocks.push(current);
+                }
+                continue;
+            }
+
+            const h = line.match(headingRegex);
+            if (h) {
+                const headingText = h[1].trim();
+                let rest = (h[2] || "").trim();
+                rest = rest.replace(/^[\s,\-–—:]+/, "").trim();
+
+                current = { heading: headingText, chunks: [] };
+                blocks.push(current);
+
+                if (rest) {
+                    current.chunks.push(rest);
+                }
+            } else if (current) {
+                // Normal text line belonging to the current day
+                current.chunks.push(line);
+            } else {
+                // Text before any heading – treat as a plain paragraph
+                if (!blocks.length || blocks[blocks.length - 1].heading) {
+                    blocks.push({ heading: null, chunks: [line] });
+                } else {
+                    blocks[blocks.length - 1].chunks.push(line);
+                }
+            }
+        }
+
+        const out = [];
+
+        for (const b of blocks) {
+            const text = b.chunks.join(" ");  // glue into one paragraph
+
+            if (b.heading) {
+                out.push(
+                    `<div class="day-block">` +
+                    `<div class="day-head">${b.heading}</div>` +
+                    `<p>${text}</p>` +
+                    `</div>`
+                );
+            } else {
+                out.push(`<p>${text}</p>`);
+            }
+        }
+
+        return out.join("\n\n");
+    }
+
     // ---------- Spot forecast ----------
 
     async function runForecast() {
@@ -205,31 +364,8 @@
             statusEl.textContent = `Forecast for ${data.spot_name} (${data.days} day(s))`;
 
             const raw = data.narrative || "No narrative returned.";
-
-            // Bold the day/date part at the start of each paragraph.
-            // Handles:
-            //   - "Sunday (Nov 30)"
-            //   - "Sunday, 30 November"
-            //   - "Sunday 30 November"
-            //   - "Sunday, November 30"
-            //   - "Sunday November 30"
-            //   - plain "Friday" / "Saturday" on their own line
-            outputEl.innerHTML = raw
-                // New style: "Sunday (Nov 30)"
-                .replace(
-                    /^([A-Za-z]+(?:\s*\([A-Za-z]{3}\s+\d{1,2}\)))/gm,
-                    '<strong class="day-head">$1</strong>'
-                )
-                // Older styles with explicit date text
-                .replace(
-                    /^([A-Za-z]+,?\s+(?:\d{1,2}\s+[A-Za-z]+|[A-Za-z]+\s+\d{1,2}))/gm,
-                    '<strong class="day-head">$1</strong>'
-                )
-                // Plain weekday headings like "Friday" on their own line
-                .replace(
-                    /^([A-Za-z]+)\s*$/gm,
-                    '<strong class="day-head">$1</strong>'
-                );
+            const formatted = formatForecastNarrative(raw);
+            outputEl.innerHTML = formatted;
 
         } catch (err) {
             statusEl.textContent = "Error talking to backend.";
@@ -237,7 +373,7 @@
         }
     }
 
-    // ---------- Daily briefing (mission planner cards) ----------
+    // ---------- Daily briefing ----------
 
     async function runBriefing() {
         const statusEl = document.getElementById("brief-status");
@@ -250,7 +386,7 @@
         const waBadge = document.getElementById("waikaia-badge");
         const waText = document.getElementById("waikaia-text");
 
-        statusEl.textContent = "Running planner…";
+        statusEl.textContent = "Scanning Te Anau, Hunter and Waikaia profiles for windows…";
         summaryEl.textContent = "";
         teBadge.textContent = huBadge.textContent = waBadge.textContent = "";
         teText.textContent = huText.textContent = waText.textContent = "";
@@ -266,7 +402,6 @@
             const data = await resp.json();
             statusEl.textContent = "";
 
-            // Prettify any window or dates in the summary text
             const summaryRaw = data.summary || "";
             summaryEl.innerHTML = prettyWindowText(summaryRaw);
 
@@ -295,7 +430,7 @@
         }
     }
 
-    // ---------- Caravan Mode (uses /api/caravan) ----------
+    // ---------- Caravan Mode ----------
 
     const CARAVAN_DAYS = 7;
     const CARAVAN_MIN_NIGHTS = 2;
@@ -320,7 +455,6 @@
                 return;
             }
 
-            // Take the best window (first in the sorted list)
             const w = windows[0];
 
             const startPretty = fmtDate(w.start_date);
@@ -375,23 +509,17 @@
         }
     }
 
-    // ---------- Wire up buttons & caravan description ----------
+    // ---------- Wire up ----------
 
     document.addEventListener("DOMContentLoaded", () => {
         const btnForecast = document.getElementById("run-forecast");
-        if (btnForecast) {
-            btnForecast.addEventListener("click", runForecast);
-        }
+        if (btnForecast) btnForecast.addEventListener("click", runForecast);
 
         const btnBrief = document.getElementById("run-briefing");
-        if (btnBrief) {
-            btnBrief.addEventListener("click", runBriefing);
-        }
+        if (btnBrief) btnBrief.addEventListener("click", runBriefing);
 
         const btnCaravan = document.getElementById("caravan-check-btn");
-        if (btnCaravan) {
-            btnCaravan.addEventListener("click", fetchCaravanWindows);
-        }
+        if (btnCaravan) btnCaravan.addEventListener("click", fetchCaravanWindows);
 
         const caravanDesc = document.getElementById("caravan-description");
         if (caravanDesc) {
@@ -401,6 +529,89 @@
                 `within your predefined regions.`;
         }
     });
+</script>
+
+<!-- About modal -->
+<div id="about-modal" class="modal-backdrop hidden">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>About Weather Brain</h2>
+      <button class="modal-close" id="about-close" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <p>
+        Weather Brain is your weather-obsessed trip planner for boating, fishing and camping missions
+        within striking distance of Wanaka.
+      </p>
+
+      <p>
+        Instead of you staring at five different weather apps, it pulls forecast data from Open-Meteo
+        and runs your own custom scoring logic over the next few days. It then tells you where the
+        best “mission windows” are – or if you’re better off staying home.
+      </p>
+
+      <h3>What it actually checks</h3>
+      <ul>
+        <li><strong>Wind &amp; gusts:</strong> how hard it’ll blow in the places you care about, and what it feels like for small boats and towing.</li>
+        <li><strong>Rain &amp; recent soak:</strong> today’s rain plus the last 48 hours to estimate how soggy campsites and tracks will be.</li>
+        <li><strong>Boating comfort:</strong> combines wind, gusts and rain into a simple score for fizz boats on Lake Hāwea and Moana missions on Lake Te Anau.</li>
+        <li><strong>Camping &amp; river fishing:</strong> looks at wind and rain to decide whether Waikaia / Piano Flat is worth the drive and tent faff.</li>
+        <li><strong>Caravan missions:</strong> scans broad regions within ~4 hours of Wanaka (Benmore/Mackenzie, Haast, Catlins, etc.) for multi-night windows that are safe to tow and comfortable to camp.</li>
+      </ul>
+
+      <h3>How the scoring works</h3>
+      <p>
+        Each mission type (Hunter fizz boat, Moana on Te Anau, Waikaia camping, Caravan Mode) has its own set
+        of thresholds – minimum window length, and GO / MAYBE cut-offs. Weather Brain scores each day on a 0–100
+        scale, finds consecutive runs that meet your minimum length, and then grades them:
+      </p>
+
+      <ul>
+        <li><strong>GO:</strong> solid window worth planning for.</li>
+        <li><strong>MAYBE:</strong> borderline but might be fine if you’re flexible.</li>
+        <li><strong>HOLD / NO-WINDOW:</strong> conditions or duration don’t stack up.</li>
+      </ul>
+
+      <p>
+        Those thresholds live in the <strong>Scoring admin</strong> panel so you can tune how picky it is
+        without touching any code.
+      </p>
+
+      <p>
+        Bottom line: Weather Brain doesn’t replace your judgement – it just chews through the data so you can
+        spend less time doom-scrolling forecasts and more time actually out there.
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const aboutBtn = document.getElementById("about-btn");
+    const aboutModal = document.getElementById("about-modal");
+    const aboutClose = document.getElementById("about-close");
+
+    if (aboutBtn && aboutModal) {
+      aboutBtn.addEventListener("click", () => {
+        aboutModal.classList.remove("hidden");
+      });
+    }
+
+    if (aboutClose && aboutModal) {
+      aboutClose.addEventListener("click", () => {
+        aboutModal.classList.add("hidden");
+      });
+    }
+
+    // Close when clicking outside the card
+    if (aboutModal) {
+      aboutModal.addEventListener("click", (e) => {
+        if (e.target === aboutModal) {
+          aboutModal.classList.add("hidden");
+        }
+      });
+    }
+  });
 </script>
 </body>
 </html>

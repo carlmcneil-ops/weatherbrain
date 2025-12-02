@@ -12,7 +12,22 @@ from fastapi import APIRouter, HTTPException
 from caravan_engine import find_best_caravan_windows
 from caravan_regions import CARAVAN_REGIONS
 from caravan_text import summarise_window
+from scoring_config import get_activity_thresholds
+
 router = APIRouter()
+
+CARAVAN_REGION_ID = "caravan_mode"
+CARAVAN_ACTIVITY_ID = "general_caravan"
+
+
+def _get_caravan_thresholds() -> Dict[str, int]:
+    """
+    Fetch caravan thresholds from the admin config.
+
+    For now we only actually *use* window_min_length.
+    go_threshold / maybe_threshold are parked for later.
+    """
+    return get_activity_thresholds(CARAVAN_REGION_ID, CARAVAN_ACTIVITY_ID)
 
 
 async def _fetch_daily_for_region(region: Dict[str, Any], days: int) -> Dict[str, Any]:
@@ -125,6 +140,10 @@ async def caravan_endpoint(days: int = 7, min_nights: int = 2):
     if days < 1 or days > 10:
         raise HTTPException(status_code=400, detail="days must be between 1 and 10")
 
+    # Always take min nights from admin config so you can tune it there.
+    cfg = _get_caravan_thresholds()
+    min_nights = int(cfg.get("window_min_length", 2))
+
     forecast_by_region: Dict[str, List[Dict[str, Any]]] = {}
 
     for region in CARAVAN_REGIONS:
@@ -150,26 +169,34 @@ async def caravan_endpoint(days: int = 7, min_nights: int = 2):
 @router.get("/api/caravan_text")
 async def caravan_text(days: int = 7, min_nights: int = 2):
     """
-    Text-friendly caravan endpoint.
-
-    - Calls the main /api/caravan logic
-    - Picks the best window (first in the list, since they're already sorted)
-    - Returns a short text blurb plus the raw windows for the UI
+    Convenience endpoint that returns a human-readable summary
+    of the best caravan window, plus the underlying windows.
     """
+    # Re-use the main caravan endpoint so behaviour stays consistent.
     base = await caravan_endpoint(days=days, min_nights=min_nights)
 
     windows = base.get("windows", [])
     if not windows:
         return {
-            "days_considered": days,
-            "min_nights": min_nights,
+            "days_considered": base.get("days_considered", days),
+            "min_nights": base.get("min_nights", min_nights),
             "region_count": base.get("region_count", 0),
-            "summary": "No decent caravan windows in this period.",
+            "summary": "No suitable caravan windows found.",
+            "best_window": None,
             "windows": [],
         }
 
     best = windows[0]
     summary_text = summarise_window(best)
+
+    return {
+        "days_considered": base.get("days_considered", days),
+        "min_nights": base.get("min_nights", min_nights),
+        "region_count": base.get("region_count", len(windows)),
+        "summary": summary_text,
+        "best_window": best,
+        "windows": windows,
+    }
 
     return {
         "days_considered": days,

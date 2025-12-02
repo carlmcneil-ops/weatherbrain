@@ -17,9 +17,14 @@ from scoring import (
     choose_best_window,
     evaluate_waikaia_trip,
 )
+from brain import score_period
 from spots import SPOTS as SPOT_LIST  # your list
 from caravan_api import router as caravan_router
-
+from scoring_config import (
+    load_config as load_admin_config,
+    save_config as save_admin_config,
+    get_activity_thresholds,
+)
 
 # Turn list-of-spots into id -> spot dict
 SPOTS: Dict[str, Dict[str, Any]] = {spot["id"]: spot for spot in SPOT_LIST}
@@ -67,6 +72,13 @@ class ForecastResponse(BaseModel):
     narrative: str
 
 
+class BrainDebugResponse(BaseModel):
+    spot_name: str
+    region_id: str
+    activity_id: str
+    scored: Dict[str, Any]
+
+
 # ------------- Helper functions -------------
 
 
@@ -84,11 +96,11 @@ async def fetch_weather(lat: float, lon: float, days: int, timezone: str) -> Dic
             "precipitation_sum",
             "windspeed_10m_max",
             "windgusts_10m_max",
+            "winddirection_10m_dominant",
         ],
         "timezone": timezone,
         "forecast_days": days,
     }
-
     async with httpx.AsyncClient(timeout=10) as http_client:
         resp = await http_client.get(url, params=params)
         if resp.status_code != 200:
@@ -109,10 +121,13 @@ def build_openai_prompt(
 ) -> str:
     """
     Turn raw weather data into a prompt for the model.
+
+    IMPORTANT: We format headings so the front-end regex can recognise them
+    and turn "Monday, December 1st ..." into the grey pill.
     """
     level_map = {
         "short": "Keep it under 3 short paragraphs.",
-        "normal": "Keep it concise but informative, 3–5 short paragraphs.",
+        "normal": "Keep it concise but informative, around 3–5 short paragraphs.",
         "nerdy": "Add more detail, but keep it under 7 short paragraphs.",
     }
     level_instruction = level_map.get(detail_level, level_map["normal"])
@@ -140,21 +155,39 @@ Here is the raw daily weather data in JSON:
 
 Write a narrative forecast specifically for fly fishers and boat anglers.
 
-Requirements:
-- Group the forecast by day with clear headings (e.g. 'Friday', 'Saturday').
-- Focus on:
-  - Wind and gusts
-  - Rain/precipitation
+ABSOLUTE FORMAT RULES (THESE ARE CRITICAL):
+- Do NOT use any markdown at all. No asterisks, no **bold**, no bullet points, no numbered lists, no tables.
+- Use normal sentence case. Every sentence must start with a capital letter.
+- For EACH forecast day:
+  - The FIRST words of the paragraph must be the day and date in this exact style:
+      Monday, December 1st looks like...
+      Tuesday, December 2nd brings...
+      Wednesday, December 3rd remains...
+    (weekday, comma, full month name, day number with st/nd/rd/th, then the rest of the sentence).
+  - Keep the day/date and the rest of that first sentence on the SAME LINE. Do not put the day/date on its own line.
+  - Separate each day's block with a single blank line.
+- After describing all days, you MAY add one final summary paragraph starting with
+  "In summary," on its own normal paragraph line.
+- Do NOT wrap titles or dates in any special characters.
+- Use plain text sentences only.
+
+- When describing wind, include wind direction in simple compass terms (e.g. "light NE", "fresh NW").
+  Use the dominant wind direction from the JSON and turn degrees into direction roughly like:
+    0–22 = N, 23–67 = NE, 68–112 = E, 113–157 = SE,
+    158–202 = S, 203–247 = SW, 248–292 = W, 293–337 = NW, 338–360 = N.
+
+CONTENT FOCUS:
+- For each day, focus on:
+  - Wind and gusts (very important)
+  - Rain / precipitation
   - Temperature (cold mornings / warm afternoons)
-  - Obvious 'go / no-go' windows
-- Give direct advice: e.g. 'Good window early morning', 'Afternoon will be rough on the lake'.
+  - Obvious 'go / no-go' windows for both fly fishing and boating
+- Give direct advice: e.g. "Good window early morning", "Afternoon will be rough on the lake".
 - Assume the reader is in New Zealand.
 
 {wind_instruction}
 {tone_instruction}
 {level_instruction}
-
-Use plain language, no emojis, no bullet points.
 """.strip()
 
 
@@ -176,17 +209,14 @@ def summarise_weather_with_ai(prompt: str) -> str:
     return response.choices[0].message.content.strip()
 
 
-# ------------- Routes -------------
+# ------------- Web UI ------------------
 
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse(
         "index.html",
-        {
-            "request": request,
-            "spots": SPOTS,
-        },
+        {"request": request, "spots": SPOTS},
     )
 
 
@@ -202,25 +232,37 @@ async def debug_static():
     files: List[str] = []
     if static_exists:
         files = os.listdir("static")
+    return {"cwd": cwd, "static_exists": static_exists, "files": files}
+
+
+@app.get("/api/spots")
+async def list_spots():
     return {
-        "cwd": cwd,
-        "static_exists": static_exists,
-        "files": files,
+        spot_id: {
+            "name": spot.get("name"),
+            "lat": spot.get("lat"),
+            "lon": spot.get("lon"),
+            "types": spot.get("types"),
+        }
+        for spot_id, spot in SPOTS.items()
     }
 
 
-# ---------- Te Anau / Moana expedition ----------
+# ------------------- Expeditions --------------------------
 
 
 @app.get("/api/teanau_expedition")
 async def teanau_expedition(days: int = 10):
     """
-    Decide if there's a worthwhile Te Anau / Moana expedition window
-    in the next N days.
+    Te Anau / Moana expedition, now using admin-config thresholds.
 
-    This is a trip, not a day mission:
-      - look for >= 2 consecutive days that are 'good' or 'excellent'
-      - uses Moana-specific scoring (aggressive on wind/gusts, relaxed on rain)
+    Logic:
+    - Score each day with build_moana_day_summaries().
+    - First, look for windows of at least `window_min_length` days
+      where the day label is >= "good".
+    - If none exist, fall back to windows where the label is >= "ok".
+    - Once we have a best_window, use go_threshold / maybe_threshold
+      from the admin config to decide GO / MAYBE-GO / HOLD.
     """
     if days < 2 or days > 10:
         raise HTTPException(status_code=400, detail="days must be between 2 and 10")
@@ -230,8 +272,6 @@ async def teanau_expedition(days: int = 10):
         raise HTTPException(status_code=500, detail="teanau_moana spot not found in SPOTS")
 
     spot = SPOTS[spot_id]
-
-    # Pull daily weather from Open-Meteo
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": spot["lat"],
@@ -243,30 +283,44 @@ async def teanau_expedition(days: int = 10):
         "forecast_days": days,
         "timezone": "Pacific/Auckland",
     }
-
     async with httpx.AsyncClient(timeout=10) as client_http:
         resp = await client_http.get(url, params=params)
         resp.raise_for_status()
     data = resp.json()
 
-    # 👉 Moana-specific scoring here
     daily = data.get("daily", {})
     day_summaries = build_moana_day_summaries(daily)
 
-    # For an expedition we want at least a 2-day window of 'good' or better.
+    # Pull thresholds from admin config
+    thresh = get_activity_thresholds("te_anau", "boating_moana")
+    window_min_length = thresh["window_min_length"]
+    go_threshold = thresh["go_threshold"]
+    maybe_threshold = thresh["maybe_threshold"]
+
+    # 1) Try with "good" or better, same as before
     windows = find_multi_day_windows(
         day_summaries,
-        min_length=2,
+        min_length=window_min_length,
         min_label="good",
     )
     best_window = choose_best_window(windows)
+    label_floor_used = "good"
 
-    # Turn that into a simple verdict
+    # 2) If nothing found, fall back to "ok" or better
+    if best_window is None:
+        windows = find_multi_day_windows(
+            day_summaries,
+            min_length=window_min_length,
+            min_label="ok",
+        )
+        best_window = choose_best_window(windows)
+        label_floor_used = "ok"
+
     if best_window is None:
         verdict = "no-window"
         reason = (
-            "No 2+ day stretch of genuinely good/excellent boating weather in this period. "
-            "Not worth planning a Te Anau mission from Wanaka."
+            f"No {window_min_length}+ day stretch of at least {label_floor_used} "
+            "boating weather on Lake Te Anau. Skip it this period."
         )
     else:
         length = best_window["length"]
@@ -274,247 +328,221 @@ async def teanau_expedition(days: int = 10):
         end = best_window["end_date"]
         avg_score = round(best_window["avg_score"])
 
-        if length >= 3 and avg_score >= 80:
+        if avg_score >= go_threshold:
             verdict = "go"
-            reason = (
-                f"{length}-day window ({start} → {end}) with strong scores "
-                f"(avg ~{avg_score}). Ideal for a Te Anau / Moana mission."
-            )
-        elif length >= 2 and avg_score >= 80:
+        elif avg_score >= maybe_threshold:
             verdict = "maybe-go"
-            reason = (
-                f"Solid {length}-day window ({start} → {end}) with good boating weather "
-                f"(avg score ~{avg_score}). Worth considering if you're keen."
-            )
         else:
             verdict = "hold"
-            reason = (
-                f"There is a {length}-day stretch ({start} → {end}), but quality is only "
-                f"average (avg score ~{avg_score}). Better to wait for a cleaner window."
-            )
+
+        reason = (
+            f"{length}-day window ({start} → {end}) avg ~{avg_score} "
+            f"using '{label_floor_used}' as the floor."
+        )
 
     return {
         "spot_id": spot_id,
         "spot_name": spot["name"],
         "days_considered": days,
-        "verdict": verdict,      # "go" | "maybe-go" | "hold" | "no-window"
+        "verdict": verdict,
         "reason": reason,
         "best_window": best_window,
-        "days": day_summaries,   # raw per-day scores
+        "days": day_summaries,
     }
 
 
-# ---------- Hunter via Lake Hawea ----------
+# ----------------- WeatherBrain v2 Hunter ------------------
+
+
+@app.get("/api/hunter_expedition_v2")
+async def hunter_expedition_v2(days: int = 10):
+    """
+    Hunter via Lake Hawea – WeatherBrain 2.0 version,
+    with verdict driven by admin-config thresholds.
+    """
+    if days < 1 or days > 10:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 10")
+
+    region_id = "hunter"
+    activity_id = "boating_fizz"
+
+    # thresholds from admin config
+    cfg = get_activity_thresholds(region_id, activity_id)
+    win_min = cfg["window_min_length"]
+    go_thr = cfg["go_threshold"]
+    maybe_thr = cfg["maybe_threshold"]
+
+    # We care about the top / mid lake, not the ramp.
+    spot_id = "hunter_confluence"
+    if spot_id not in SPOTS:
+        raise HTTPException(status_code=500, detail="hunter_confluence spot not found in SPOTS")
+
+    spot = SPOTS[spot_id]
+    lat = spot["lat"]
+    lon = spot["lon"]
+    timezone = spot.get("timezone", "Pacific/Auckland")
+
+    # 1. Fetch raw weather (same pattern as /api/brain_debug)
+    weather = await fetch_weather(lat, lon, days, timezone)
+    daily = weather.get("daily", {})
+
+    times = daily.get("time", [])
+    tmax = daily.get("temperature_2m_max", [])
+    tmin = daily.get("temperature_2m_min", [])
+    rain = daily.get("precipitation_sum", [])
+    wind = daily.get("windspeed_10m_max", [])
+    gust = daily.get("windgusts_10m_max", [])
+
+    # 2. Build DayWeather list for the brain
+    day_weather: List[Dict[str, Any]] = []
+    for i, date_str in enumerate(times):
+        try:
+            day_weather.append(
+                {
+                    "date": date_str,
+                    "temp_max": float(tmax[i]),
+                    "temp_min": float(tmin[i]),
+                    "rain_mm": float(rain[i]),
+                    "wind_kmh": float(wind[i]),
+                    "gust_kmh": float(gust[i]),
+                }
+            )
+        except (IndexError, ValueError):
+            continue
+
+    # 3. Use the WeatherBrain 2.0 scoring engine for this region/activity.
+    scored = score_period(region_id, activity_id, day_weather)
+
+    windows = scored.get("windows") or []
+    best_window = scored.get("best_window")
+
+    # 4. Apply thresholds from scoring_config.json
+    if not windows or best_window is None:
+        verdict = "no-window"
+        reason = (
+            f"WeatherBrain 2.0 can't find a clean Hunter window of at least "
+            f"{win_min} day(s) at the top/mid of Lake Hawea. Better to wait."
+        )
+        best_window_out = None
+    else:
+        length = best_window["length"]
+        start = best_window["start_date"]
+        end = best_window["end_date"]
+        avg_score = round(best_window["avg_score"])
+
+        if length >= win_min and avg_score >= go_thr:
+            verdict = "go"
+            reason = (
+                f"WeatherBrain 2.0 calls a GO window for the Hunter: "
+                f"{length} days ({start} → {end}) averaging ~{avg_score}. "
+                "Launch from Lake Hawea – Township / Campground ramp "
+                "(south end, west shore)."
+            )
+        elif length >= win_min and avg_score >= maybe_thr:
+            verdict = "maybe-go"
+            reason = (
+                f"WeatherBrain 2.0 sees a workable but not perfect Hunter window: "
+                f"{length} days ({start} → {end}), average score ~{avg_score}. "
+                "Worth a crack if you’re keen."
+            )
+        else:
+            verdict = "hold"
+            reason = (
+                f"There is a {length}-day stretch at the Hunter / top of Lake Hawea "
+                f"({start} → {end}), average score ~{avg_score}, but with your "
+                "current thresholds it still lands as HOLD."
+            )
+
+        best_window_out = best_window
+
+    return {
+        "days_considered": days,
+        "lake_plans": [
+            {
+                "spot_id": spot_id,
+                "spot_name": spot["name"],
+                "scored": scored,
+            }
+        ],
+        "chosen_lake_spot_id": spot_id,
+        "chosen_lake_spot_name": spot["name"],
+        "verdict": verdict,        # "go" | "maybe-go" | "hold" | "no-window"
+        "reason": reason,
+        "best_window": best_window_out,
+        "profile": {
+            "region_id": region_id,
+            "activity_id": activity_id,
+        },
+    }
 
 
 @app.get("/api/hunter_expedition")
 async def hunter_expedition(days: int = 10):
     """
-    Decide if there's a worthwhile Hawea → Hunter mission window
-    in the next N days.
+    Backwards-compatible wrapper around hunter_expedition_v2.
 
-    Notes:
-      - This can be a one-day hit-and-run (there and back in a day).
-      - We still prefer 2+ day windows if they exist, but a single
-        really good day is enough to green-light a Hunter mission.
+    Returns (as closely as possible) the original hunter_expedition shape so
+    existing UI code that expects lake_options / best_window keeps working.
     """
-    if days < 1 or days > 10:
-        raise HTTPException(status_code=400, detail="days must be between 1 and 10")
+    v2 = await hunter_expedition_v2(days=days)
 
-    # We'll treat Timaru Creek & Township as candidate launch zones
-    lake_spot_ids = ["hawea_timaru", "hawea_township"]
-    fishing_spot_id = "hunter_confluence"
+    spot_id = "hunter_confluence"
+    spot_name = SPOTS.get(spot_id, {}).get(
+        "name", "Hunter River Mouth / Top of Lake Hawea"
+    )
 
-    for sid in lake_spot_ids + [fishing_spot_id]:
-        if sid not in SPOTS:
-            raise HTTPException(status_code=500, detail=f"spot '{sid}' not found in SPOTS")
-
-    async def fetch_lake_plan(spot_id: str) -> Dict[str, Any]:
-        spot = SPOTS[spot_id]
-
-        url = "https://api.open-meteo.com/v1/forecast"
-        params = {
-            "latitude": spot["lat"],
-            "longitude": spot["lon"],
-            "daily": (
-                "temperature_2m_max,temperature_2m_min,precipitation_sum,"
-                "windspeed_10m_max,windgusts_10m_max"
-            ),
-            "forecast_days": days,
-            "timezone": "Pacific/Auckland",
-        }
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, params=params, timeout=10)
-            resp.raise_for_status()
-        data = resp.json()
-
-        daily = data.get("daily", {})
-        day_summaries = build_boating_day_summaries(daily)
-
-        # IMPORTANT CHANGE:
-        # Allow 1-day windows of "good" or better for hit-and-run missions.
-        windows = find_multi_day_windows(
-            day_summaries,
-            min_length=1,      # was 2 before
-            min_label="good",  # only care about "good" or better
-        )
-        best_window = choose_best_window(windows)
-
-        return {
-            "spot_id": spot_id,
-            "spot_name": spot["name"],
-            "days": day_summaries,
-            "windows": windows,
-            "best_window": best_window,
-        }
-
-    # Get lake plans for Timaru & Township
-    lake_plans = []
-    for sid in lake_spot_ids:
-        lake_plans.append(await fetch_lake_plan(sid))
-
-    # Choose the better of the two lake options based on best_window
-    best_lake_plan = None
-    for plan in lake_plans:
-        bw = plan["best_window"]
-        if bw is None:
-            continue
-        if best_lake_plan is None:
-            best_lake_plan = plan
-        else:
-            current = plan["best_window"]
-            chosen = best_lake_plan["best_window"]
-            if (
-                current["length"] > chosen["length"]
-                or (
-                    current["length"] == chosen["length"]
-                    and current["avg_score"] > chosen["avg_score"]
-                )
-            ):
-                best_lake_plan = plan
-
-    # No good days at all
-    if best_lake_plan is None:
-        verdict = "no-window"
-        reason = (
-            "No 'good' or better day on Lake Hawea in this period. "
-            "Not worth planning a Hunter mission from Wanaka."
-        )
-        return {
-            "lake_options": lake_plans,
-            "fishing_spot_id": fishing_spot_id,
-            "fishing_spot_name": SPOTS[fishing_spot_id]["name"],
-            "days_considered": days,
-            "verdict": verdict,
-            "reason": reason,
-            "chosen_lake_spot_id": None,
-            "chosen_lake_spot_name": None,
-            "best_window": None,
-        }
-
-    # We have at least one 'good' or better window (length can be 1+)
-    bw = best_lake_plan["best_window"]
-    length = bw["length"]
-    start = bw["start_date"]
-    end = bw["end_date"]
-    avg_score = round(bw["avg_score"])
-
-    # Verdict logic – now supports 1-day hit-and-run
-    if length >= 2 and avg_score >= 80:
-        verdict = "go"
-        reason = (
-            f"{length}-day window on Lake Hawea ({start} → {end}) with strong scores "
-            f"(avg ~{avg_score}). Great for a Hunter mission with the option to stay over."
-        )
-    elif length == 1 and avg_score >= 80:
-        verdict = "go"
-        reason = (
-            f"One standout day on Lake Hawea ({start}) with strong conditions "
-            f"(score ~{avg_score}). Ideal for a hit-and-run Hunter mission."
-        )
-    elif length == 1 and avg_score >= 60:
-        verdict = "maybe-go"
-        reason = (
-            f"One decent day on Lake Hawea ({start}) (score ~{avg_score}). "
-            "OK for a quick Hunter blast if you're keen and flexible."
-        )
-    else:
-        verdict = "hold"
-        reason = (
-            f"There is a {length}-day stretch on Hawea ({start} → {end}), "
-            f"but quality is only average (score ~{avg_score}). "
-            "Better to wait for a cleaner Hunter window."
+    lake_options: List[Dict[str, Any]] = []
+    for plan in v2.get("lake_plans", []):
+        scored = plan.get("scored", {})
+        lake_options.append(
+            {
+                "spot_id": plan.get("spot_id"),
+                "spot_name": plan.get("spot_name"),
+                "days": scored.get("days", []),
+                "windows": scored.get("windows", []),
+                "best_window": scored.get("best_window"),
+            }
         )
 
     return {
-        "lake_options": lake_plans,
-        "fishing_spot_id": fishing_spot_id,
-        "fishing_spot_name": SPOTS[fishing_spot_id]["name"],
-        "days_considered": days,
-        "verdict": verdict,  # "go" | "maybe-go" | "hold" | "no-window"
-        "reason": reason,
-        "chosen_lake_spot_id": best_lake_plan["spot_id"],
-        "chosen_lake_spot_name": best_lake_plan["spot_name"],
-        "best_window": bw,
+        "lake_options": lake_options,
+        "fishing_spot_id": spot_id,
+        "fishing_spot_name": spot_name,
+        "days_considered": v2.get("days_considered"),
+        "verdict": v2.get("verdict"),
+        "reason": v2.get("reason"),
+        "chosen_lake_spot_id": v2.get("chosen_lake_spot_id"),
+        "chosen_lake_spot_name": v2.get("chosen_lake_spot_name"),
+        "best_window": v2.get("best_window"),
     }
 
 
-# ---------- Waikaia camping / fishing ----------
+# ------------------------- Waikaia -------------------------
 
 
 def score_waikaia_day(wind_kmh: float, rain_mm: float) -> Dict[str, Any]:
-    """
-    Very simple Waikaia scoring for now:
-    - Big rain or big wind = no-go
-    - Light wind and low rain = good
-    """
-    # Hard no: properly wet or properly howling
     if rain_mm >= 15 or wind_kmh >= 40:
-        return {
-            "score": 10,
-            "label": "no-go",
-            "reason": "Wet or windy enough that you’ll regret the trip.",
-        }
-
-    # Good: light / moderate breeze, small rain
+        return {"score": 10, "label": "no-go", "reason": "Wet or windy."}
     if wind_kmh <= 20 and rain_mm <= 5:
-        return {
-            "score": 75,
-            "label": "good",
-            "reason": "Decent conditions – fine for camping and river time.",
-        }
-
-    # Ok but a bit grim
+        return {"score": 75, "label": "good", "reason": "Decent."}
     if wind_kmh <= 30 and rain_mm <= 10:
-        return {
-            "score": 60,
-            "label": "ok",
-            "reason": "Moderate breeze or some rain — still workable.",
-        }
-
-    # Marginal in between
-    return {
-        "score": 40,
-        "label": "marginal",
-        "reason": "Fresh wind or steady rain — campsite will get damp, river visibility drops.",
-    }
+        return {"score": 60, "label": "ok", "reason": "Workable."}
+    return {"score": 40, "label": "marginal", "reason": "Fresh wind or steady rain."}
 
 
 @app.get("/api/waikaia_trip")
 async def waikaia_trip(days: int = 7):
     """
-    Look for a Waikaia camping/fishing window in the next N days.
+    Waikaia / Piano Flat trip – now hooked to admin thresholds.
     """
     if days < 1 or days > 10:
         raise HTTPException(status_code=400, detail="days must be between 1 and 10")
 
-    spot_id = "waikaia_piano_flat"
-    if spot_id not in SPOTS:
-        raise HTTPException(status_code=500, detail="waikaia_piano_flat spot not found")
+    sid = "waikaia_piano_flat"
+    if sid not in SPOTS:
+        raise HTTPException(status_code=500, detail="waikaia_piano_flat missing")
 
-    spot = SPOTS[spot_id]
-
+    spot = SPOTS[sid]
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": spot["lat"],
@@ -526,7 +554,6 @@ async def waikaia_trip(days: int = 7):
         "forecast_days": days,
         "timezone": "Pacific/Auckland",
     }
-
     async with httpx.AsyncClient() as client_http:
         resp = await client_http.get(url, params=params, timeout=10)
         resp.raise_for_status()
@@ -537,141 +564,98 @@ async def waikaia_trip(days: int = 7):
     winds = daily.get("windspeed_10m_max", [])
     rain = daily.get("precipitation_sum", [])
 
-    day_summaries: List[Dict[str, Any]] = []
-    for i, date_str in enumerate(times):
+    scored_days = []
+    for i, d in enumerate(times):
         try:
             w = float(winds[i])
             r = float(rain[i])
-        except (IndexError, ValueError):
+            s = score_waikaia_day(w, r)
+            scored_days.append(
+                {"date": d, "wind_kmh": w, "rain_mm": r, **s}
+            )
+        except Exception:
             continue
 
-        scored = score_waikaia_day(w, r)
-        day_summaries.append(
-            {
-                "date": date_str,
-                "wind_kmh": w,
-                "rain_mm": r,
-                "score": scored["score"],
-                "label": scored["label"],
-                "reason": scored["reason"],
-            }
-        )
+    # thresholds from admin config
+    thresh = get_activity_thresholds("waikaia", "river_fishing")
+    window_min_length = thresh["window_min_length"]
+    go_threshold = thresh["go_threshold"]
+    maybe_threshold = thresh["maybe_threshold"]
 
-    # Look for 2+ days of 'good' or better
-    windows = find_multi_day_windows(day_summaries, min_length=2, min_label="good")
-    best_window = choose_best_window(windows)
+    windows = find_multi_day_windows(
+        scored_days,
+        min_length=window_min_length,
+        min_label="good",
+    )
+    best = choose_best_window(windows)
 
-    if best_window is None:
-        verdict = "no-window"
-        reason = "No multi-day Waikaia window worth camping/fishing."
+    if best is None:
+        return {
+            "spot_id": sid,
+            "spot_name": spot["name"],
+            "days_considered": days,
+            "days": scored_days,
+            "verdict": "no-window",
+            "reason": f"No multi-day Waikaia window ({window_min_length}+ days).",
+            "windows": windows,
+            "best_window": None,
+        }
+
+    length = best["length"]
+    start = best["start_date"]
+    end = best["end_date"]
+    avg_score = round(best["avg_score"])
+
+    if avg_score >= go_threshold:
+        verdict = "go"
+    elif avg_score >= maybe_threshold:
+        verdict = "maybe-go"
     else:
-        length = best_window["length"]
-        start = best_window["start_date"]
-        end = best_window["end_date"]
-        avg_score = round(best_window["avg_score"])
-        if length >= 3 and avg_score >= 75:
-            verdict = "go"
-            reason = (
-                f"{length}-day Waikaia window ({start} → {end}) with solid conditions "
-                f"(avg ~{avg_score})."
-            )
-        elif length >= 2 and avg_score >= 70:
-            verdict = "maybe-go"
-            reason = (
-                f"{length}-day Waikaia window ({start} → {end}) looks reasonable "
-                f"(avg ~{avg_score}). Worth a crack if you’re keen."
-            )
-        else:
-            verdict = "hold"
-            reason = (
-                f"There is a {length}-day stretch ({start} → {end}), but it’s only average "
-                f"(avg ~{avg_score})."
-            )
+        verdict = "hold"
 
     return {
-        "spot_id": spot_id,
+        "spot_id": sid,
         "spot_name": spot["name"],
         "days_considered": days,
-        "days": day_summaries,
-        "verdict": verdict,
-        "reason": reason,
+        "days": scored_days,
         "windows": windows,
-        "best_window": best_window,
+        "best_window": best,
+        "verdict": verdict,
+        "reason": f"{length}-day stretch ({start} → {end}) avg ~{avg_score}",
     }
 
 
-# ---------- Daily “What should Carl do?” briefing ----------
+# ------------------- Daily Briefing ------------------------
 
 
 @app.get("/api/daily_briefing")
 async def daily_briefing(days: int = 10):
     """
-    High-level "What should Carl do?" planner.
-
-    Checks:
-      - Te Anau / Moana expedition
-      - Hunter mission via Lake Hawea
-      - Waikaia camping/fishing
-
-    Returns one best option + the raw plans.
+    Uses expedition endpoints (which themselves use the admin thresholds).
     """
     if days < 2 or days > 10:
         raise HTTPException(status_code=400, detail="days must be between 2 and 10")
 
-    # Call the internal route handlers directly instead of hitting our own HTTP API
     teanau = await teanau_expedition(days=days)
-    hunter = await hunter_expedition(days=days)
+    hunter = await hunter_expedition_v2(days=days)
     waikaia = await waikaia_trip(days=min(days, 7))
 
-    def verdict_rank(verdict: str) -> int:
-        order = {
-            "go": 3,
-            "maybe-go": 2,
-            "hold": 1,
-            "no-window": 0,
-        }
-        return order.get(verdict, 0)
+    def vr(x):
+        return {"go": 3, "maybe-go": 2, "hold": 1, "no-window": 0}.get(x, 0)
 
     options = [
-        {
-            "id": "teanau_expedition",
-            "kind": "boating",
-            "label": "Te Anau / Moana mission",
-            "data": teanau,
-            "rank": verdict_rank(teanau.get("verdict", "no-window")),
-        },
-        {
-            "id": "hunter_expedition",
-            "kind": "boating+fishing",
-            "label": "Hunter via Lake Hawea",
-            "data": hunter,
-            "rank": verdict_rank(hunter.get("verdict", "no-window")),
-        },
-        {
-            "id": "waikaia_trip",
-            "kind": "camping+fishing",
-            "label": "Waikaia – Piano Flat camping/fishing",
-            "data": waikaia,
-            "rank": verdict_rank(waikaia.get("verdict", "no-window")),
-        },
+        ("teanau_expedition", "boating", teanau),
+        ("hunter_expedition", "boating+fishing", hunter),
+        ("waikaia_trip", "camping+fishing", waikaia),
     ]
 
-    best = max(options, key=lambda o: o["rank"])
+    best = max(options, key=lambda o: vr(o[2].get("verdict", "no-window")))
+    best_data = best[2]
 
-    if best["rank"] == 0:
-        summary = (
-            "No decent multi-day windows for Te Anau, Hunter or Waikaia in this period. "
-            "Best move is to stay home, tie flies, or muck around on the local lakes."
-        )
+    if vr(best_data.get("verdict")) == 0:
+        summary = "No decent multi-day windows anywhere. Stay home, tie flies."
     else:
-        v = best["data"].get("verdict")
-        reason = best["data"].get("reason", "")
-        if best["id"] == "teanau_expedition":
-            summary = f"Best play is Te Anau / Moana: verdict '{v}'. {reason}"
-        elif best["id"] == "hunter_expedition":
-            summary = f"Best play is a Hunter mission via Lake Hawea: verdict '{v}'. {reason}"
-        else:
-            summary = f"Best play is a Waikaia camping/fishing trip: verdict '{v}'. {reason}"
+        summary = f"{best_data.get('reason', '')}"
 
     return {
         "days_considered": days,
@@ -680,34 +664,30 @@ async def daily_briefing(days: int = 10):
         "hunter": hunter,
         "waikaia": waikaia,
         "best_option": {
-            "id": best["id"],
-            "label": best["label"],
-            "verdict": best["data"].get("verdict"),
-            "reason": best["data"].get("reason"),
+            "id": best[0],
+            "label": best[1],
+            "verdict": best_data.get("verdict"),
+            "reason": best_data.get("reason"),
         },
     }
 
 
-# ---------- Generic forecast endpoint for the UI ----------
+# ---------------------- UI FORECAST ------------------------
 
 
 @app.post("/api/forecast", response_model=ForecastResponse)
 async def get_forecast(payload: ForecastRequest):
-    """
-    Main endpoint the UI will hit.
-    """
     if payload.spot_id not in SPOTS:
         raise HTTPException(status_code=404, detail="Unknown spot_id")
 
     spot = SPOTS[payload.spot_id]
-    lat = spot["lat"]
-    lon = spot["lon"]
-    timezone = spot.get("timezone", "Pacific/Auckland")
+    weather = await fetch_weather(
+        spot["lat"],
+        spot["lon"],
+        payload.days,
+        spot.get("timezone", "Pacific/Auckland"),
+    )
 
-    # 1. Fetch raw weather
-    weather = await fetch_weather(lat, lon, payload.days, timezone)
-
-    # 2. Build prompt for the model
     prompt = build_openai_prompt(
         spot_name=spot["name"],
         days=payload.days,
@@ -716,8 +696,6 @@ async def get_forecast(payload: ForecastRequest):
         wind_sensitive=payload.wind_sensitive,
         weather=weather,
     )
-
-    # 3. Get narrative from OpenAI
     narrative = summarise_weather_with_ai(prompt)
 
     return ForecastResponse(
@@ -728,76 +706,178 @@ async def get_forecast(payload: ForecastRequest):
     )
 
 
-# ---------- Boating plan preview across lakes ----------
+# ---------------------- Brain Debug ------------------------
 
 
-@app.get("/api/boating_plan_preview")
-async def boating_plan_preview(days: int = 7):
+@app.post("/api/brain_debug", response_model=BrainDebugResponse)
+async def brain_debug(payload: ForecastRequest):
     """
-    Preview boating conditions for the next N days across key spots.
-
-    Bias:
-      - Te Anau / Moana berth is primary.
-      - Hunter access via Lake Hawea is secondary.
-      - Other boating lakes are treated as backup suggestions.
+    Transparent WeatherBrain scoring for a given spot_id.
     """
-    if days < 1 or days > 10:
-        raise HTTPException(status_code=400, detail="days must be between 1 and 10")
+    if payload.spot_id not in SPOTS:
+        raise HTTPException(status_code=404, detail="Unknown spot_id")
 
-    # Primary + secondary boating spots
-    primary_id = "teanau_moana"
-    hunter_ids = ["hawea_timaru", "hawea_township"]
-    other_boat_spots = [
-        sid
-        for sid, s in SPOTS.items()
-        if "boating" in (s.get("types") or [])
-        and sid not in [primary_id, *hunter_ids]
-    ]
+    spot = SPOTS[payload.spot_id]
+    lat, lon = spot["lat"], spot["lon"]
+    timezone = spot.get("timezone", "Pacific/Auckland")
 
-    async def fetch_daily_for_spot(spot_id: str) -> Dict[str, Any]:
-        spot = SPOTS[spot_id]
-        url = "https://api.open-meteo.com/v1/forecast"
-        params = {
-            "latitude": spot["lat"],
-            "longitude": spot["lon"],
-            "daily": (
-                "temperature_2m_max,temperature_2m_min,precipitation_sum,"
-                "windspeed_10m_max,windgusts_10m_max"
-            ),
-            "forecast_days": days,
-            "timezone": "Pacific/Auckland",
-        }
-        async with httpx.AsyncClient() as client_http:
-            resp = await client_http.get(url, params=params, timeout=10)
-            resp.raise_for_status()
-        data = resp.json()
-        daily = data.get("daily", {})
-        day_summaries = build_moana_day_summaries(daily)
-        windows = find_multi_day_windows(day_summaries, min_length=2, min_label="good")
-        return {
-            "spot_id": spot_id,
-            "spot_name": spot["name"],
-            "days": day_summaries,
-            "good_windows": windows,
-        }
+    weather = await fetch_weather(lat, lon, payload.days, timezone)
+    daily = weather.get("daily", {})
 
-    results: Dict[str, Any] = {}
+    days_list = []
+    times = daily.get("time", [])
+    tmax = daily.get("temperature_2m_max", [])
+    tmin = daily.get("temperature_2m_min", [])
+    rain = daily.get("precipitation_sum", [])
+    wind = daily.get("windspeed_10m_max", [])
+    gust = daily.get("windgusts_10m_max", [])
 
-    # Primary: Te Anau / Moana
-    if primary_id in SPOTS:
-        results["primary"] = await fetch_daily_for_spot(primary_id)
+    for i, d in enumerate(times):
+        try:
+            days_list.append(
+                {
+                    "date": d,
+                    "temp_max": float(tmax[i]),
+                    "temp_min": float(tmin[i]),
+                    "rain_mm": float(rain[i]),
+                    "wind_kmh": float(wind[i]),
+                    "gust_kmh": float(gust[i]),
+                }
+            )
+        except Exception:
+            continue
 
-    # Hunter access options
-    hunter_results: List[Dict[str, Any]] = []
-    for sid in hunter_ids:
-        if sid in SPOTS:
-            hunter_results.append(await fetch_daily_for_spot(sid))
-    results["hunter_options"] = hunter_results
+    if payload.spot_id == "teanau_moana":
+        region_id = "te_anau"
+        activity_id = "boating_moana"
+    elif payload.spot_id == "waikaia_piano_flat":
+        region_id = "waikaia"
+        activity_id = "river_fishing"
+    else:
+        region_id = "hunter"
+        activity_id = "boating_fizz"
 
-    # Other boating lakes as backup
-    backup_results: List[Dict[str, Any]] = []
-    for sid in other_boat_spots:
-        backup_results.append(await fetch_daily_for_spot(sid))
-    results["other_boating_spots"] = backup_results
+    scored = score_period(region_id, activity_id, days_list)
 
-    return results
+    return BrainDebugResponse(
+        spot_name=spot["name"],
+        region_id=region_id,
+        activity_id=activity_id,
+        scored=scored,
+    )
+
+
+# ------------------- Admin config API (JSON) -------------------
+
+
+@app.get("/api/admin/config")
+async def get_admin_config():
+    """
+    Return the current scoring/config JSON for the admin UI.
+    """
+    try:
+        cfg = load_admin_config()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load config: {e}",
+        )
+    return cfg
+
+
+@app.post("/api/admin/config")
+async def update_admin_config(request: Request):
+    """
+    Replace scoring_config.json with the posted JSON body.
+
+    Strict validation:
+      - Must be a dict
+      - Must contain "regions"
+      - At least one activity must exist
+    """
+    try:
+        new_cfg = await request.json()
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON payload — could not parse",
+        )
+
+    if not isinstance(new_cfg, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Config must be a JSON object",
+        )
+
+    regions = new_cfg.get("regions")
+    if not isinstance(regions, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Config must contain a 'regions' object",
+        )
+
+    has_activities = False
+    for r in regions.values():
+        acts = r.get("activities")
+        if isinstance(acts, dict) and acts:
+            has_activities = True
+            break
+
+    if not has_activities:
+        raise HTTPException(
+            status_code=400,
+            detail="Config must define at least one region with activities",
+        )
+
+    try:
+        save_admin_config(new_cfg)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save config: {e}",
+        )
+
+    return {"status": "ok", "saved": True}
+
+
+# ---------------------- Admin config UI ------------------------
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    """
+    Simple admin UI so we can tweak scoring/model params without touching code.
+    Renders templates/admin.html.
+    """
+    try:
+        config = load_admin_config()
+    except Exception:
+        config = {}
+
+    return templates.TemplateResponse(
+        "admin.html",
+        {
+            "request": request,
+            "config": config,
+        },
+    )
+
+
+# ---------------------- ADMIN THRESHOLD DEBUG ------------------------
+
+
+@app.get("/api/debug/thresholds")
+async def debug_thresholds():
+    """
+    Dump the effective window/go/maybe thresholds per region/activity
+    after reading scoring_config.json.
+    """
+    cfg = load_admin_config()
+    out: Dict[str, Dict[str, Any]] = {}
+
+    for region_id, region in cfg.get("regions", {}).items():
+        out[region_id] = {}
+        for act_id in region.get("activities", {}).keys():
+            out[region_id][act_id] = get_activity_thresholds(region_id, act_id)
+
+    return out
