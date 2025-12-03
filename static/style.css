@@ -265,3 +265,330 @@ button:hover {
         grid-template-columns: 1fr;
     }
 }
+/* ---------- Base tweaks ---------- */
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Helvetica Neue", Arial, sans-serif;
+  background: #020712;
+  color: #e3e7f0;
+}
+
+.page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 12px 12px 24px;
+}
+
+.header h1 {
+  font-size: 1.7rem;
+  margin-bottom: 0.2rem;
+}
+
+.header p {
+  margin-top: 0;
+  font-size: 0.95rem;
+}
+
+/* Cards & layout */
+
+.layout {
+  display: flex;
+  flex-direction: column;         /* mobile default: stack */
+  gap: 12px;
+}
+
+.card {
+  background: #0b1017;
+  border-radius: 14px;
+  border: 1px solid #222a3a;
+  padding: 12px 14px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+
+.card h2 {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+}
+
+/* Make form rows more finger-friendly */
+
+.form-row {
+  margin-bottom: 8px;
+}
+
+.form-row label {
+  display: block;
+  font-size: 0.8rem;
+  margin-bottom: 3px;
+  opacity: 0.9;
+}
+
+input[type="number"],
+select {
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid #2d3545;
+  background: #050914;
+  color: #e3e7f0;
+  font-size: 0.9rem;
+}
+
+/* Buttons */
+
+button,
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid #3c93ff33;
+  background: linear-gradient(135deg, #0f5bff, #2cb1ff);
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+button:hover,
+.btn:hover {
+  filter: brightness(1.08);
+}
+
+/* In the cards, make the main actions full-width on small screens */
+#run-forecast,
+#run-briefing,
+#caravan-check-btn {
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* Detail cards (Te Anau / Hunter / Waikaia) */
+
+.details-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.detail-card h3 {
+  font-size: 0.95rem;
+  margin: 0 0 2px;
+}
+
+/* Badges & pills */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.badge-go {
+  background: #0d4f2a;
+  color: #9effc1;
+}
+
+.badge-maybe {
+  background: #4d430f;
+  color: #ffe89b;
+}
+
+.badge-hold {
+  background: #463016;
+  color: #ffd0a3;
+}
+
+.badge-nowindow {
+  background: #31121a;
+  color: #ff9aa7;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.pill-go {
+  background: #14532d;
+  color: #bbf7d0;
+}
+
+/* Forecast output */
+
+.forecast-output .day-block {
+  margin-bottom: 10px;
+}
+
+.forecast-output .day-head {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #111827;
+  font-size: 0.75rem;
+  margin-bottom: 2px;
+}
+
+/* Caravan Mode section */
+
+#caravan-card h3 {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+
+#caravan-output p {
+  margin: 2px 0;
+  font-size: 0.85rem;
+}
+
+/* ---------- Bigger screens ---------- */
+
+@media (min-width: 768px) {
+  .page {
+    padding: 20px 24px 40px;
+  }
+
+  .header h1 {
+    font-size: 2rem;
+  }
+
+  .layout {
+    flex-direction: row;          /* side-by-side on desktop */
+  }
+
+  .layout > .card {
+    flex: 1 1 0;
+  }
+
+  .details-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  #run-forecast,
+  #run-briefing,
+  #caravan-check-btn {
+    width: auto;
+  }
+}
+/* ---------- Mobile layout tweaks ---------- */
+
+@media (max-width: 768px) {
+  html, body {
+    font-size: 16px;
+    margin: 0;
+    padding: 0;
+  }
+
+  .page {
+    padding: 12px;
+  }
+
+  .header h1 {
+    font-size: 1.6rem;
+    line-height: 1.2;
+  }
+
+  .header p {
+    font-size: 0.95rem;
+  }
+
+  /* Make the two main cards stack vertically instead of side-by-side */
+  .layout {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .card {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 14px 14px;
+  }
+
+  /* Make buttons easy to hit with a thumb */
+  button,
+  .btn {
+    width: 100%;
+    max-width: 100%;
+    text-align: center;
+  }
+
+  /* Detail cards (Te Anau / Hunter / Waikaia / caravan options) */
+  .details-grid {
+    display: block;
+  }
+
+  .detail-card {
+    width: 100%;
+    margin-bottom: 10px;
+  }
+
+  /* Forecast text – a bit more breathing room */
+  .forecast-output {
+    font-size: 0.95rem;
+    line-height: 1.45;
+  }
+
+  /* Badges / pills not so cramped */
+  .badge,
+  .pill {
+    font-size: 0.8rem;
+    padding: 3px 8px;
+  }
+}
+/* ===== Top nav chips ===== */
+
+.nav-chips {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  background: #1f2633;
+  color: #bfc6d4;
+  border: 1px solid #2e3645;
+  padding: 8px 14px;
+  border-radius: 14px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.chip:hover {
+  background: #2a3242;
+  border-color: #3c4557;
+  color: white;
+}
+
+.chip:active {
+  transform: scale(0.97);
+}
+
+/* Mobile tweak */
+@media (max-width: 768px) {
+  .nav-chips {
+    gap: 6px;
+  }
+  .chip {
+    padding: 7px 12px;
+    font-size: 0.8rem;
+  }
+}
