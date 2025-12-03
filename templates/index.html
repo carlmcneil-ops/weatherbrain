@@ -84,7 +84,7 @@
     </style>
 </head>
 <body>
-  <div class="page">
+    <div class="page">
     <div class="header">
       <h1>Weather Brain</h1>
       <p>Your smart weather PA for boating, fishing and camping.</p>
@@ -198,6 +198,7 @@
             </div>
         </div>
     </div>
+
   </div>
 
 <script>
@@ -430,83 +431,118 @@
         }
     }
 
-    // ---------- Caravan Mode ----------
+    // ---------- Metvuw situation map ----------
 
-    const CARAVAN_DAYS = 7;
-    const CARAVAN_MIN_NIGHTS = 2;
+    function loadMetvuwMap() {
+        const img = document.getElementById("metvuw-map");
+        const status = document.getElementById("map-status");
+        if (!img) return;
 
-    async function fetchCaravanWindows() {
-        const output = document.getElementById("caravan-output");
-        output.textContent = "Checking caravan windows…";
+        if (status) status.textContent = "Loading map…";
 
-        try {
-            const res = await fetch(`/api/caravan?days=${CARAVAN_DAYS}&min_nights=${CARAVAN_MIN_NIGHTS}`);
-            if (!res.ok) {
-                output.textContent = `Error from server: ${res.status}`;
-                return;
-            }
+        // South Island rain chart, 6h step, cache-busted
+        const baseUrl = "https://www.metvuw.com/forecast/forecast1.php?type=rain&region=nzsi&tim=006";
+        const url = baseUrl + "&_=" + Date.now();
 
-            const data = await res.json();
-            const windows = data.windows || [];
+        img.onload = () => {
+            if (status) status.textContent = "";
+        };
 
-            if (!windows.length) {
-                output.textContent =
-                    "No decent caravan windows in the next few days. Stay home, tie flies.";
-                return;
-            }
+        img.onerror = () => {
+            if (status) status.textContent = "Couldn’t load Metvuw map.";
+        };
 
-            const w = windows[0];
+        img.src = url;
+    }
 
-            const startPretty = fmtDate(w.start_date);
-            const endPretty = fmtDate(w.end_date);
-            const nights = w.nights;
+    // ---------- Caravan Mode (top 2 windows) ----------
 
-            const titleLine =
-                `<strong>${w.region_name}</strong> – ` +
-                `${nights} night${nights === 1 ? "" : "s"} look mint ` +
-                `(<strong>${startPretty} → ${endPretty}</strong>)`;
+    async function wbRunCaravanScan() {
+      const btn = document.getElementById("caravan-check-btn");
+      const out = document.getElementById("caravan-output");
+      const desc = document.getElementById("caravan-description");
 
-            const campBits = new Set();
-            const groundBits = new Set();
-            const towBits = new Set();
+      if (!btn || !out) {
+        console.error("Caravan elements not found");
+        return;
+      }
 
-            (w.days || []).forEach(d => {
-                (d.notes || []).forEach(n => {
-                    if (n.startsWith("Camp:")) {
-                        campBits.add(n.replace("Camp:", "").trim());
-                    } else if (n.startsWith("Ground:")) {
-                        groundBits.add(n.replace("Ground:", "").trim());
-                    } else if (n.startsWith("Towing:") || n.startsWith("Gusts:")) {
-                        towBits.add(n.trim());
-                    }
-                });
-            });
+      btn.disabled = true;
+      out.innerHTML = "Checking caravan windows…";
 
-            const campText = campBits.size
-                ? Array.from(campBits).join(", ")
-                : "Conditions at camp look fine.";
-
-            const groundText = groundBits.size
-                ? Array.from(groundBits).join(", ")
-                : "";
-
-            const towText = towBits.size
-                ? Array.from(towBits).join(" / ")
-                : "Towing looks easy the whole route.";
-
-            const lines = [];
-            lines.push(titleLine);
-            lines.push(`<strong>Camp:</strong> ${campText}`);
-            if (groundText) {
-                lines.push(`<strong>Ground:</strong> ${groundText}`);
-            }
-            lines.push(`<strong>Travel:</strong> ${towText}`);
-
-            output.innerHTML = lines.join("<br>");
-        } catch (err) {
-            console.error(err);
-            output.textContent = "Could not talk to the caravan engine. Is the server running?";
+      try {
+        const res = await fetch("/api/caravan?days=7");
+        if (!res.ok) {
+          throw new Error("Bad response from /api/caravan");
         }
+        const data = await res.json();
+
+        const daysConsidered = data.days_considered || 7;
+        const minNights = data.min_nights || 2;
+
+        if (desc) {
+          desc.textContent = `Scans the next ${daysConsidered} days for ${minNights}+ night caravan windows within your predefined regions.`;
+        }
+
+        const allWindows = Array.isArray(data.windows) ? data.windows : [];
+        if (!allWindows.length) {
+          out.innerHTML = `<p>No ${minNights}+ night caravan windows in the next ${daysConsidered} days.</p>`;
+          return;
+        }
+
+        // Take the best two by avg_score
+        const windows = allWindows
+          .slice()
+          .sort((a, b) => (b.avg_score || 0) - (a.avg_score || 0))
+          .slice(0, 2);
+
+        const html = windows
+          .map((w, idx) => {
+            const title = `${w.region_name} – ${w.nights} night${w.nights > 1 ? "s" : ""} `
+              + `(${fmtDate(w.start_date)} → ${fmtDate(w.end_date)})`;
+
+            const allNotes = (w.days || []).flatMap(d => d.notes || []);
+
+            const campNotes   = allNotes.filter(n => n.startsWith("Camp:"));
+            const groundNotes = allNotes.filter(n => n.startsWith("Ground:"));
+            const towNotes    = allNotes.filter(n => n.startsWith("Towing:"));
+            const gustNotes   = allNotes.filter(n => n.startsWith("Gusts:"));
+
+            const mergeNotes = (list, label) => {
+              if (!list.length) return "";
+              const stripped = list.map(n => n.replace(label + ":", "").trim());
+              const uniq = [...new Set(stripped)];
+              return uniq.join(", ");
+            };
+
+            const campText   = mergeNotes(campNotes, "Camp")   || "OK";
+            const groundText = mergeNotes(groundNotes, "Ground") || "OK";
+            const towText    = mergeNotes(towNotes, "Towing")  || "OK";
+            const gustText   = mergeNotes(gustNotes, "Gusts")  || "OK";
+
+            const label = idx === 0 ? "BEST OPTION" : "ALSO GOOD";
+
+            return `
+              <div class="detail-card" style="margin-top:0.75rem;">
+                <h4 style="margin-bottom:0.25rem;">
+                  <span class="pill pill-go" style="margin-right:0.4rem;">${label}</span>
+                  ${title}
+                </h4>
+                <p><strong>Camp:</strong> ${campText}</p>
+                <p><strong>Ground:</strong> ${groundText}</p>
+                <p><strong>Travel:</strong> Towing: ${towText} / Gusts: ${gustText}</p>
+              </div>
+            `;
+          })
+          .join("");
+
+        out.innerHTML = html;
+      } catch (err) {
+        console.error(err);
+        out.innerHTML = "<p>Couldn’t fetch caravan windows right now.</p>";
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     // ---------- Wire up ----------
@@ -519,15 +555,24 @@
         if (btnBrief) btnBrief.addEventListener("click", runBriefing);
 
         const btnCaravan = document.getElementById("caravan-check-btn");
-        if (btnCaravan) btnCaravan.addEventListener("click", fetchCaravanWindows);
+        if (btnCaravan) btnCaravan.addEventListener("click", wbRunCaravanScan);
 
         const caravanDesc = document.getElementById("caravan-description");
-        if (caravanDesc) {
+        if (caravanDesc && !caravanDesc.textContent.trim()) {
             caravanDesc.textContent =
-                `Scans the next ${CARAVAN_DAYS} days for ` +
-                `${CARAVAN_MIN_NIGHTS}+ night caravan windows ` +
-                `within your predefined regions.`;
+                "Scans the next 7 days for 2+ night caravan windows within your predefined regions.";
         }
+
+        const mapBtn = document.getElementById("refresh-map-btn");
+        if (mapBtn) {
+            mapBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                loadMetvuwMap();
+            });
+        }
+
+        // Load map on page open
+        loadMetvuwMap();
     });
 </script>
 

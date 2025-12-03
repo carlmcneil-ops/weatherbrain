@@ -1,22 +1,29 @@
-# macOS bullshit
-.DS_Store
-
 # Python
 __pycache__/
 *.pyc
-
-# Virtual environments
-.env
-venv/
-.venv/
-
-# Editor configs
-.vscode/
-.idea/
-
-# Byte compiled
 *.pyo
 *.pyd
-
-# Logs
 *.log
+
+# Virtual env
+.venv/
+venv/
+
+# macOS cruft
+.DS_Store
+
+# Env / secrets
+.env
+.env.*
+.env.save
+
+# Editor stuff
+.idea/
+.vscode/
+
+# Byte-compiled / cached
+*.sqlite3
+
+# Test / coverage
+.coverage
+htmlcov/

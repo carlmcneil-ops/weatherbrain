@@ -18,8 +18,8 @@
         "boating_moana": {
           "label": "Moana berth missions",
           "window_min_length": 2,
-          "go_threshold": 75,
-          "maybe_threshold": 70,
+          "go_threshold": 70,
+          "maybe_threshold": 65,
           "notes": "Moana on Lake Te Anau from Wanaka."
         }
       }
@@ -31,7 +31,7 @@
           "label": "Camping + river fishing",
           "window_min_length": 2,
           "go_threshold": 75,
-          "maybe_threshold": 70,
+          "maybe_threshold": 65,
           "notes": "Score thresholds for Waikaia river trips."
         }
       }

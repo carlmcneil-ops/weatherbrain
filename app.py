@@ -17,7 +17,7 @@ from scoring import (
     choose_best_window,
     evaluate_waikaia_trip,
 )
-from brain import score_period
+from brain import score_period, _find_windows, _choose_best_window
 from spots import SPOTS as SPOT_LIST  # your list
 from caravan_api import router as caravan_router
 from scoring_config import (
@@ -144,6 +144,38 @@ def build_openai_prompt(
         "Write like a local guide who actually fishes there."
     )
 
+    lower_name = spot_name.lower()
+
+    # Activity-specific instruction:
+    # 1) Waikaia – wade fishing only, no boats.
+    if "waikaia" in lower_name:
+        activity_instruction = (
+            "Write for fly fishers on foot only. "
+            "This is a river valley with wade fishing and camping, no boats or lake craft. "
+            "Do NOT mention boating or boat anglers anywhere in your forecast."
+        )
+
+    # 2) Te Anau / Moana – very conservative boating rules.
+    elif "te anau" in lower_name or "moana" in lower_name:
+        activity_instruction = (
+            "Write for a boater running a launch called Moana on Lake Te Anau. "
+            "This skipper is very conservative about lake conditions. "
+            "As a rule of thumb:\n"
+            "- Sustained winds above about 12 km/h OR gusts above about 45 km/h "
+            "should usually be treated as rough, unpleasant, or no-go for relaxed boating.\n"
+            "- Strong winds combined with heavy rain should be treated as 'no-go' for boating.\n"
+            "Be very blunt about when the lake will be lumpy, ugly, or unsafe, and clearly "
+            "flag those days as no-go for boating. Only describe a day as a 'good window' "
+            "for Moana if winds and gusts are genuinely light and conditions are relaxed."
+        )
+
+    # 3) Everything else – normal lakes / coasts.
+    else:
+        activity_instruction = (
+            "Write for both fly fishers and boat anglers where appropriate. "
+            "If boating is obviously unrealistic at this location, focus on fishing only."
+        )
+
     return f"""
 You are a fishing-savvy weather assistant.
 
@@ -153,7 +185,8 @@ Days ahead: {days}
 Here is the raw daily weather data in JSON:
 {weather}
 
-Write a narrative forecast specifically for fly fishers and boat anglers.
+Write a narrative forecast.
+{activity_instruction}
 
 ABSOLUTE FORMAT RULES (THESE ARE CRITICAL):
 - Do NOT use any markdown at all. No asterisks, no **bold**, no bullet points, no numbered lists, no tables.
@@ -181,13 +214,12 @@ CONTENT FOCUS:
   - Wind and gusts (very important)
   - Rain / precipitation
   - Temperature (cold mornings / warm afternoons)
-  - Obvious 'go / no-go' windows for both fly fishing and boating
+  - Obvious 'go / no-go' windows for both fly fishing and boating (only if boating is realistic for this location)
 - Give direct advice: e.g. "Good window early morning", "Afternoon will be rough on the lake".
 - Assume the reader is in New Zealand.
 
 {wind_instruction}
 {tone_instruction}
-{level_instruction}
 """.strip()
 
 
@@ -291,36 +323,36 @@ async def teanau_expedition(days: int = 10):
     daily = data.get("daily", {})
     day_summaries = build_moana_day_summaries(daily)
 
-    # Pull thresholds from admin config
+        # Pull thresholds from admin config
     thresh = get_activity_thresholds("te_anau", "boating_moana")
     window_min_length = thresh["window_min_length"]
     go_threshold = thresh["go_threshold"]
     maybe_threshold = thresh["maybe_threshold"]
 
-    # 1) Try with "good" or better, same as before
-    windows = find_multi_day_windows(
-        day_summaries,
-        min_length=window_min_length,
-        min_label="good",
-    )
-    best_window = choose_best_window(windows)
-    label_floor_used = "good"
+    # Build a simple list of {date, score} for numeric window finding
+    scored_days = [
+        {"date": d["date"], "score": d.get("score", 0)}
+        for d in day_summaries
+        if "date" in d
+    ]
 
-    # 2) If nothing found, fall back to "ok" or better
-    if best_window is None:
-        windows = find_multi_day_windows(
-            day_summaries,
-            min_length=window_min_length,
-            min_label="ok",
-        )
-        best_window = choose_best_window(windows)
-        label_floor_used = "ok"
+    # Minimum score a day must have to be part of any window.
+    # Using min(go, maybe) means if you drag both down in admin,
+    # you genuinely allow softer windows.
+    min_score_for_window = min(go_threshold, maybe_threshold)
+
+    windows = _find_windows(
+        scored_days,
+        min_score=min_score_for_window,
+        min_length=window_min_length,
+    )
+    best_window = _choose_best_window(windows)
 
     if best_window is None:
         verdict = "no-window"
         reason = (
-            f"No {window_min_length}+ day stretch of at least {label_floor_used} "
-            "boating weather on Lake Te Anau. Skip it this period."
+            f"No {window_min_length}+ day window on Lake Te Anau "
+            f"with scores above ~{min_score_for_window}. Skip it this period."
         )
     else:
         length = best_window["length"]
@@ -337,7 +369,7 @@ async def teanau_expedition(days: int = 10):
 
         reason = (
             f"{length}-day window ({start} → {end}) avg ~{avg_score} "
-            f"using '{label_floor_used}' as the floor."
+            f"based on your current thresholds."
         )
 
     return {
@@ -582,13 +614,26 @@ async def waikaia_trip(days: int = 7):
     go_threshold = thresh["go_threshold"]
     maybe_threshold = thresh["maybe_threshold"]
 
+        # First try: multi-day windows where each day is at least "good"
     windows = find_multi_day_windows(
         scored_days,
         min_length=window_min_length,
         min_label="good",
     )
     best = choose_best_window(windows)
+    label_floor_used = "good"
 
+    # Fallback: allow "ok" or better if no good-only window exists
+    if best is None:
+        windows = find_multi_day_windows(
+            scored_days,
+            min_length=window_min_length,
+            min_label="ok",
+        )
+        best = choose_best_window(windows)
+        label_floor_used = "ok"
+
+    # Still nothing? Then it's genuinely not worth a Waikaia mission.
     if best is None:
         return {
             "spot_id": sid,
@@ -596,7 +641,7 @@ async def waikaia_trip(days: int = 7):
             "days_considered": days,
             "days": scored_days,
             "verdict": "no-window",
-            "reason": f"No multi-day Waikaia window ({window_min_length}+ days).",
+            "reason": f"No {window_min_length}+ day Waikaia window at 'ok' or better.",
             "windows": windows,
             "best_window": None,
         }
@@ -606,10 +651,12 @@ async def waikaia_trip(days: int = 7):
     end = best["end_date"]
     avg_score = round(best["avg_score"])
 
+    # Now your thresholds actually matter
     if avg_score >= go_threshold:
         verdict = "go"
     elif avg_score >= maybe_threshold:
         verdict = "maybe-go"
+        # everything else is effectively "hold"
     else:
         verdict = "hold"
 
@@ -621,7 +668,10 @@ async def waikaia_trip(days: int = 7):
         "windows": windows,
         "best_window": best,
         "verdict": verdict,
-        "reason": f"{length}-day stretch ({start} → {end}) avg ~{avg_score}",
+        "reason": (
+            f"{length}-day Waikaia window ({start} → {end}) "
+            f"avg ~{avg_score} using '{label_floor_used}' as the floor."
+        ),
     }
 
 

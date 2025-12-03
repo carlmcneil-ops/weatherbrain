@@ -191,42 +191,39 @@ def score_moana_day(wind_kmh: float, gust_kmh: float, rain_mm: float) -> Dict[st
     """
     Scoring specifically for Moana on Lake Te Anau.
 
-    Much more conservative than generic boating:
-
-    - Over about 12 km/h sustained OR 45+ km/h gusts ⇒ basically a no-go.
-    - Moderate breeze but not crazy gusts ⇒ marginal/ok at best.
-    - We don't really penalise light rain – Moana is enclosed.
+    Still conservative, but allows genuinely light-to-moderate days
+    to count as 'ok' or 'good' instead of everything being no-go.
     """
 
-    # Hard "no thanks" – squally, ugly Te Anau.
-    if wind_kmh > 12 or gust_kmh > 45:
+    # Absolute no-go: really rough or very wet.
+    if wind_kmh >= 22 or gust_kmh >= 55 or rain_mm >= 20:
         return {
             "score": 10,
             "label": "no-go",
-            "reason": "Strong, squally winds – Te Anau will be ugly and uncomfortable in Moana.",
+            "reason": "Strong winds and/or heavy rain – Te Anau will be ugly and unsafe for relaxed boating in Moana.",
         }
 
-    # Fresh, lumpy, 'only if you have to move her'.
-    if wind_kmh >= 9 or gust_kmh >= 30 or rain_mm >= 15:
+    # Marginal: fresh, lumpy, or quite wet but not completely insane.
+    if wind_kmh >= 14 or gust_kmh >= 45 or rain_mm >= 12:
         return {
-            "score": 30,
+            "score": 35,
             "label": "marginal",
-            "reason": "Fresh winds likely to make the lake lumpy. Only go if you really need to move the boat.",
+            "reason": "Fresh winds or steady rain – lumpy lake conditions. Only go if you really need to move the boat.",
         }
 
-    # Very gentle conditions – pretty relaxed.
-    if wind_kmh <= 5 and gust_kmh <= 18 and rain_mm <= 5:
+    # Good: genuinely gentle conditions.
+    if wind_kmh <= 8 and gust_kmh <= 25 and rain_mm <= 5:
         return {
             "score": 85,
             "label": "good",
-            "reason": "Light breeze and manageable weather – nice relaxed cruise for Moana.",
+            "reason": "Light breeze and low rain – nice relaxed cruise for Moana on Lake Te Anau.",
         }
 
-    # Everything in between – tolerable but not hero stuff.
+    # OK: anything in between – workable but not hero stuff.
     return {
-        "score": 60,
+        "score": 65,
         "label": "ok",
-        "reason": "Manageable breeze for Moana – fine for a run, but expect some chop.",
+        "reason": "Moderate breeze or a bit of rain – workable for Moana, but expect some chop and movement.",
     }
 
 
