@@ -263,10 +263,14 @@ def summarise_weather_with_ai(prompt: str) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         "index.html",
         {"request": request, "spots": SPOTS},
     )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.get("/health")
