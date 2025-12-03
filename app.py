@@ -1,11 +1,13 @@
 import os
 from typing import Dict, Any, List
+import secrets
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends, status
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 from openai import OpenAI
 
@@ -25,7 +27,22 @@ from scoring_config import (
     save_config as save_admin_config,
     get_activity_thresholds,
 )
+security = HTTPBasic()
 
+def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
+    # Username doesn’t matter for now — we only check the password
+    correct_password = os.getenv("ADMIN_PASS", "Ceildhi")
+
+    is_correct_password = secrets.compare_digest(credentials.password, correct_password)
+
+    if not is_correct_password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+    return "admin"
 # Turn list-of-spots into id -> spot dict
 SPOTS: Dict[str, Dict[str, Any]] = {spot["id"]: spot for spot in SPOT_LIST}
 
@@ -894,23 +911,9 @@ async def update_admin_config(request: Request):
 
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request):
-    """
-    Simple admin UI so we can tweak scoring/model params without touching code.
-    Renders templates/admin.html.
-    """
-    try:
-        config = load_admin_config()
-    except Exception:
-        config = {}
-
-    return templates.TemplateResponse(
-        "admin.html",
-        {
-            "request": request,
-            "config": config,
-        },
-    )
+async def admin_page(request: Request, user: str = Depends(verify_admin)):
+    config = load_admin_config()
+    return templates.TemplateResponse("admin.html", {"request": request, "config": config})
 
 
 # ---------------------- ADMIN THRESHOLD DEBUG ------------------------
