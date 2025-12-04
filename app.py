@@ -1,6 +1,7 @@
 import os
 from typing import Dict, Any, List
 import secrets
+import re
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Depends, status
@@ -27,7 +28,9 @@ from scoring_config import (
     save_config as save_admin_config,
     get_activity_thresholds,
 )
+
 security = HTTPBasic()
+
 
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
     # Username doesn’t matter for now — we only check the password
@@ -43,6 +46,8 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
         )
 
     return "admin"
+
+
 # Turn list-of-spots into id -> spot dict
 SPOTS: Dict[str, Dict[str, Any]] = {spot["id"]: spot for spot in SPOT_LIST}
 
@@ -139,9 +144,12 @@ def build_openai_prompt(
     """
     Turn raw weather data into a prompt for the model.
 
-    IMPORTANT: We format headings so the front-end regex can recognise them
-    and turn "Monday, December 1st ..." into the grey pill.
+    IMPORTANT:
+    - This function ONLY builds the prompt.
+    - Date mapping from Open-Meteo is made explicit so the model
+      cannot invent its own calendar (e.g. always starting on the 1st).
     """
+
     level_map = {
         "short": "Keep it under 3 short paragraphs.",
         "normal": "Keep it concise but informative, around 3–5 short paragraphs.",
@@ -163,36 +171,52 @@ def build_openai_prompt(
 
     lower_name = spot_name.lower()
 
-    # Activity-specific instruction:
-    # 1) Waikaia – wade fishing only, no boats.
+    # ---- Activity-specific prompt rules ----
     if "waikaia" in lower_name:
         activity_instruction = (
             "Write for fly fishers on foot only. "
             "This is a river valley with wade fishing and camping, no boats or lake craft. "
-            "Do NOT mention boating or boat anglers anywhere in your forecast."
+            "Do NOT mention boating or boat anglers.\n\n"
+            "PRIORITY:\n"
+            "- Focus on river clarity (rain) and recent rainfall over the period.\n"
+            "- Light or no rain = clear or nicely tinted.\n"
+            "- Heavy rain = coloured or blown out and clearly flagged.\n\n"
+            "WIND:\n"
+            "- Wind mainly affects comfort and casting difficulty, not basic fishability.\n"
+            "- Fresh wind (around 35–55 km/h) can be breezy or hard work but still fishable.\n"
+            "- Only label a day 'unsafe' or 'no-go due to wind' if wind or gusts "
+            "are extremely strong (around or above 80 km/h) and would make wading hazardous."
         )
-
-    # 2) Te Anau / Moana – very conservative boating rules.
     elif "te anau" in lower_name or "moana" in lower_name:
         activity_instruction = (
             "Write for a boater running a launch called Moana on Lake Te Anau. "
-            "This skipper is very conservative about lake conditions. "
+            "This skipper is very conservative about lake conditions.\n\n"
             "As a rule of thumb:\n"
-            "- Sustained winds above about 12 km/h OR gusts above about 45 km/h "
-            "should usually be treated as rough, unpleasant, or no-go for relaxed boating.\n"
-            "- Strong winds combined with heavy rain should be treated as 'no-go' for boating.\n"
-            "Be very blunt about when the lake will be lumpy, ugly, or unsafe, and clearly "
-            "flag those days as no-go for boating. Only describe a day as a 'good window' "
-            "for Moana if winds and gusts are genuinely light and conditions are relaxed."
+            "- Sustained winds above ~12 km/h OR gusts above ~45 km/h should usually be treated "
+            "as rough, unpleasant, or no-go for relaxed boating.\n"
+            "- Strong winds combined with heavy rain should be treated as 'no-go' for boating.\n\n"
+            "Be blunt about when the lake will be lumpy, ugly, or unsafe, and clearly flag those "
+            "days as no-go for boating. Only describe a day as a 'good window' for Moana if winds "
+            "and gusts are genuinely light and conditions are relaxed."
         )
-
-    # 3) Everything else – normal lakes / coasts.
     else:
         activity_instruction = (
             "Write for both fly fishers and boat anglers where appropriate. "
-            "If boating is obviously unrealistic at this location, focus on fishing only."
+            "If boating is unrealistic at this location, focus on fishing only."
         )
 
+    # ---- Build explicit date mapping so the model can't cheat ----
+    daily = weather.get("daily", {}) or {}
+    times = daily.get("time") or []
+
+    date_lines: List[str] = []
+    for idx, iso_date in enumerate(times, start=1):
+        # Example: DAY 1: 2025-12-05
+        date_lines.append(f"DAY {idx}: {iso_date}")
+
+    date_block = "\n".join(date_lines) if date_lines else "No dates available."
+
+    # ---- Final combined prompt ----
     return f"""
 You are a fishing-savvy weather assistant.
 
@@ -202,8 +226,15 @@ Days ahead: {days}
 Here is the raw daily weather data in JSON:
 {weather}
 
-Write a narrative forecast.
-{activity_instruction}
+These are the exact dates for each forecast day. You MUST use these actual dates
+and MUST NOT invent or shift dates:
+
+{date_block}
+
+For each forecast day, work in order: DAY 1, DAY 2, DAY 3, etc.
+For each ISO date, convert it to the correct real weekday and month.
+For example, if DAY 1 is 2025-12-05 and that date is a Friday, you must write:
+"Friday, December 5th looks like ..."
 
 ABSOLUTE FORMAT RULES (THESE ARE CRITICAL):
 - Do NOT use any markdown at all. No asterisks, no **bold**, no bullet points, no numbered lists, no tables.
@@ -214,6 +245,7 @@ ABSOLUTE FORMAT RULES (THESE ARE CRITICAL):
       Tuesday, December 2nd brings...
       Wednesday, December 3rd remains...
     (weekday, comma, full month name, day number with st/nd/rd/th, then the rest of the sentence).
+  - The weekday and date MUST match the real calendar for the ISO date in the list above.
   - Keep the day/date and the rest of that first sentence on the SAME LINE. Do not put the day/date on its own line.
   - Separate each day's block with a single blank line.
 - After describing all days, you MAY add one final summary paragraph starting with
@@ -228,16 +260,60 @@ ABSOLUTE FORMAT RULES (THESE ARE CRITICAL):
 
 CONTENT FOCUS:
 - For each day, focus on:
-  - Wind and gusts (very important)
-  - Rain / precipitation
-  - Temperature (cold mornings / warm afternoons)
-  - Obvious 'go / no-go' windows for both fly fishing and boating (only if boating is realistic for this location)
+  - Wind and gusts (very important).
+  - Rain / precipitation and its impact on river clarity or lake conditions.
+  - Temperature (cold mornings / warm afternoons).
+  - Obvious 'go / no-go' windows for both fly fishing and boating (only if boating is realistic for this location).
 - Give direct advice: e.g. "Good window early morning", "Afternoon will be rough on the lake".
 - Assume the reader is in New Zealand.
+
+Detail level:
+{level_instruction}
+
+{activity_instruction}
 
 {wind_instruction}
 {tone_instruction}
 """.strip()
+
+
+# ------------------------------------------------------------
+# WIND CLAMP FUNCTION — MUST BE OUTSIDE build_openai_prompt
+# ------------------------------------------------------------
+
+def clamp_wind_numbers_to_data(narrative: str, weather: Dict[str, Any]) -> str:
+    """
+    Prevent narrative from inventing wind speeds higher than the real forecast.
+    """
+    daily = weather.get("daily") or {}
+    gusts = daily.get("windgusts_10m_max") or []
+    speeds = daily.get("windspeed_10m_max") or []
+
+    max_allowed = 0.0
+    for seq in (gusts, speeds):
+        for v in seq:
+            try:
+                max_allowed = max(max_allowed, float(v))
+            except Exception:
+                pass
+
+    if max_allowed <= 0:
+        return narrative
+
+    pattern = r"(\d+(?:\.\d+)?)\s*km/?h"
+
+    def repl(match: re.Match) -> str:
+        raw = match.group(1)
+        try:
+            val = float(raw)
+        except Exception:
+            return match.group(0)
+
+        if val > max_allowed + 1:
+            return f"{round(max_allowed)} km/h"
+        return match.group(0)
+
+    return re.sub(pattern, repl, narrative)
 
 
 def summarise_weather_with_ai(prompt: str) -> str:
@@ -290,6 +366,9 @@ async def debug_static():
 
 @app.get("/api/spots")
 async def list_spots():
+    """
+    Simple list of all known spots: id, name, lat, lon, types.
+    """
     return {
         spot_id: {
             "name": spot.get("name"),
@@ -301,6 +380,25 @@ async def list_spots():
     }
 
 
+@app.get("/api/spot_raw/{spot_id}")
+async def spot_raw(spot_id: str, days: int = 7):
+    """
+    Debug endpoint: return raw Open-Meteo daily data for a given spot_id.
+    Use this to compare against YR etc.
+    """
+    if spot_id not in SPOTS:
+        raise HTTPException(status_code=404, detail="Unknown spot_id")
+
+    spot = SPOTS[spot_id]
+    weather = await fetch_weather(
+        spot["lat"],
+        spot["lon"],
+        days,
+        spot.get("timezone", "Pacific/Auckland"),
+    )
+    return weather
+
+
 # ------------------- Expeditions --------------------------
 
 
@@ -308,14 +406,6 @@ async def list_spots():
 async def teanau_expedition(days: int = 10):
     """
     Te Anau / Moana expedition, now using admin-config thresholds.
-
-    Logic:
-    - Score each day with build_moana_day_summaries().
-    - First, look for windows of at least `window_min_length` days
-      where the day label is >= "good".
-    - If none exist, fall back to windows where the label is >= "ok".
-    - Once we have a best_window, use go_threshold / maybe_threshold
-      from the admin config to decide GO / MAYBE-GO / HOLD.
     """
     if days < 2 or days > 10:
         raise HTTPException(status_code=400, detail="days must be between 2 and 10")
@@ -344,7 +434,7 @@ async def teanau_expedition(days: int = 10):
     daily = data.get("daily", {})
     day_summaries = build_moana_day_summaries(daily)
 
-        # Pull thresholds from admin config
+    # Pull thresholds from admin config
     thresh = get_activity_thresholds("te_anau", "boating_moana")
     window_min_length = thresh["window_min_length"]
     go_threshold = thresh["go_threshold"]
@@ -357,9 +447,6 @@ async def teanau_expedition(days: int = 10):
         if "date" in d
     ]
 
-    # Minimum score a day must have to be part of any window.
-    # Using min(go, maybe) means if you drag both down in admin,
-    # you genuinely allow softer windows.
     min_score_for_window = min(go_threshold, maybe_threshold)
 
     windows = _find_windows(
@@ -410,8 +497,7 @@ async def teanau_expedition(days: int = 10):
 @app.get("/api/hunter_expedition_v2")
 async def hunter_expedition_v2(days: int = 10):
     """
-    Hunter via Lake Hawea – WeatherBrain 2.0 version,
-    with verdict driven by admin-config thresholds.
+    Hunter via Lake Hawea – WeatherBrain 2.0 version.
     """
     if days < 1 or days > 10:
         raise HTTPException(status_code=400, detail="days must be between 1 and 10")
@@ -419,13 +505,11 @@ async def hunter_expedition_v2(days: int = 10):
     region_id = "hunter"
     activity_id = "boating_fizz"
 
-    # thresholds from admin config
     cfg = get_activity_thresholds(region_id, activity_id)
     win_min = cfg["window_min_length"]
     go_thr = cfg["go_threshold"]
     maybe_thr = cfg["maybe_threshold"]
 
-    # We care about the top / mid lake, not the ramp.
     spot_id = "hunter_confluence"
     if spot_id not in SPOTS:
         raise HTTPException(status_code=500, detail="hunter_confluence spot not found in SPOTS")
@@ -435,7 +519,6 @@ async def hunter_expedition_v2(days: int = 10):
     lon = spot["lon"]
     timezone = spot.get("timezone", "Pacific/Auckland")
 
-    # 1. Fetch raw weather (same pattern as /api/brain_debug)
     weather = await fetch_weather(lat, lon, days, timezone)
     daily = weather.get("daily", {})
 
@@ -446,7 +529,6 @@ async def hunter_expedition_v2(days: int = 10):
     wind = daily.get("windspeed_10m_max", [])
     gust = daily.get("windgusts_10m_max", [])
 
-    # 2. Build DayWeather list for the brain
     day_weather: List[Dict[str, Any]] = []
     for i, date_str in enumerate(times):
         try:
@@ -463,13 +545,11 @@ async def hunter_expedition_v2(days: int = 10):
         except (IndexError, ValueError):
             continue
 
-    # 3. Use the WeatherBrain 2.0 scoring engine for this region/activity.
     scored = score_period(region_id, activity_id, day_weather)
 
     windows = scored.get("windows") or []
     best_window = scored.get("best_window")
 
-    # 4. Apply thresholds from scoring_config.json
     if not windows or best_window is None:
         verdict = "no-window"
         reason = (
@@ -519,7 +599,7 @@ async def hunter_expedition_v2(days: int = 10):
         ],
         "chosen_lake_spot_id": spot_id,
         "chosen_lake_spot_name": spot["name"],
-        "verdict": verdict,        # "go" | "maybe-go" | "hold" | "no-window"
+        "verdict": verdict,
         "reason": reason,
         "best_window": best_window_out,
         "profile": {
@@ -533,9 +613,6 @@ async def hunter_expedition_v2(days: int = 10):
 async def hunter_expedition(days: int = 10):
     """
     Backwards-compatible wrapper around hunter_expedition_v2.
-
-    Returns (as closely as possible) the original hunter_expedition shape so
-    existing UI code that expects lake_options / best_window keeps working.
     """
     v2 = await hunter_expedition_v2(days=days)
 
@@ -574,13 +651,47 @@ async def hunter_expedition(days: int = 10):
 
 
 def score_waikaia_day(wind_kmh: float, rain_mm: float) -> Dict[str, Any]:
-    if rain_mm >= 15 or wind_kmh >= 40:
-        return {"score": 10, "label": "no-go", "reason": "Wet or windy."}
-    if wind_kmh <= 20 and rain_mm <= 5:
-        return {"score": 75, "label": "good", "reason": "Decent."}
-    if wind_kmh <= 30 and rain_mm <= 10:
-        return {"score": 60, "label": "ok", "reason": "Workable."}
-    return {"score": 40, "label": "marginal", "reason": "Fresh wind or steady rain."}
+    """
+    Waikaia / Piano Flat – river-first logic.
+    """
+
+    if rain_mm >= 20:
+        return {
+            "score": 10,
+            "label": "no-go",
+            "reason": "River likely blown out and dirty after heavy rain.",
+        }
+
+    if rain_mm >= 10:
+        return {
+            "score": 40,
+            "label": "marginal",
+            "reason": "River probably high and coloured after recent rain.",
+        }
+
+    if rain_mm >= 5:
+        base_score = 65
+        base_label = "ok"
+        base_reason = "Some colour in the river but should still be fishable."
+    else:
+        base_score = 80
+        base_label = "good"
+        base_reason = "River likely clear or only lightly tinted."
+
+    if wind_kmh >= 55:
+        score = max(40, base_score - 20)
+        label = "marginal" if score < 60 else base_label
+        reason = base_reason + " Expect strong wind and tricky casting."
+    elif wind_kmh >= 40:
+        score = base_score - 10
+        label = base_label
+        reason = base_reason + " Breezy on the river but still workable."
+    else:
+        score = base_score
+        label = base_label
+        reason = base_reason
+
+    return {"score": score, "label": label, "reason": reason}
 
 
 @app.get("/api/waikaia_trip")
@@ -617,7 +728,7 @@ async def waikaia_trip(days: int = 7):
     winds = daily.get("windspeed_10m_max", [])
     rain = daily.get("precipitation_sum", [])
 
-    scored_days = []
+    scored_days: List[Dict[str, Any]] = []
     for i, d in enumerate(times):
         try:
             w = float(winds[i])
@@ -629,13 +740,11 @@ async def waikaia_trip(days: int = 7):
         except Exception:
             continue
 
-    # thresholds from admin config
     thresh = get_activity_thresholds("waikaia", "river_fishing")
     window_min_length = thresh["window_min_length"]
     go_threshold = thresh["go_threshold"]
     maybe_threshold = thresh["maybe_threshold"]
 
-        # First try: multi-day windows where each day is at least "good"
     windows = find_multi_day_windows(
         scored_days,
         min_length=window_min_length,
@@ -644,7 +753,6 @@ async def waikaia_trip(days: int = 7):
     best = choose_best_window(windows)
     label_floor_used = "good"
 
-    # Fallback: allow "ok" or better if no good-only window exists
     if best is None:
         windows = find_multi_day_windows(
             scored_days,
@@ -654,7 +762,6 @@ async def waikaia_trip(days: int = 7):
         best = choose_best_window(windows)
         label_floor_used = "ok"
 
-    # Still nothing? Then it's genuinely not worth a Waikaia mission.
     if best is None:
         return {
             "spot_id": sid,
@@ -672,12 +779,10 @@ async def waikaia_trip(days: int = 7):
     end = best["end_date"]
     avg_score = round(best["avg_score"])
 
-    # Now your thresholds actually matter
     if avg_score >= go_threshold:
         verdict = "go"
     elif avg_score >= maybe_threshold:
         verdict = "maybe-go"
-        # everything else is effectively "hold"
     else:
         verdict = "hold"
 
@@ -711,7 +816,7 @@ async def daily_briefing(days: int = 10):
     hunter = await hunter_expedition_v2(days=days)
     waikaia = await waikaia_trip(days=min(days, 7))
 
-    def vr(x):
+    def vr(x: str) -> int:
         return {"go": 3, "maybe-go": 2, "hold": 1, "no-window": 0}.get(x, 0)
 
     options = [
@@ -723,7 +828,7 @@ async def daily_briefing(days: int = 10):
     best = max(options, key=lambda o: vr(o[2].get("verdict", "no-window")))
     best_data = best[2]
 
-    if vr(best_data.get("verdict")) == 0:
+    if vr(best_data.get("verdict", "no-window")) == 0:
         summary = "No decent multi-day windows anywhere. Stay home, tie flies."
     else:
         summary = f"{best_data.get('reason', '')}"
@@ -759,6 +864,9 @@ async def get_forecast(payload: ForecastRequest):
         spot.get("timezone", "Pacific/Auckland"),
     )
 
+    # Debug: see what we send to the model
+    print("DEBUG RAW WEATHER FOR NARRATIVE:", payload.spot_id, weather)
+
     prompt = build_openai_prompt(
         spot_name=spot["name"],
         days=payload.days,
@@ -768,6 +876,9 @@ async def get_forecast(payload: ForecastRequest):
         weather=weather,
     )
     narrative = summarise_weather_with_ai(prompt)
+
+    # Clamp any invented crazy wind/gust values back to the real data
+    narrative = clamp_wind_numbers_to_data(narrative, weather)
 
     return ForecastResponse(
         spot_name=spot["name"],
@@ -795,7 +906,7 @@ async def brain_debug(payload: ForecastRequest):
     weather = await fetch_weather(lat, lon, payload.days, timezone)
     daily = weather.get("daily", {})
 
-    days_list = []
+    days_list: List[Dict[str, Any]] = []
     times = daily.get("time", [])
     tmax = daily.get("temperature_2m_max", [])
     tmin = daily.get("temperature_2m_min", [])
@@ -860,11 +971,6 @@ async def get_admin_config():
 async def update_admin_config(request: Request):
     """
     Replace scoring_config.json with the posted JSON body.
-
-    Strict validation:
-      - Must be a dict
-      - Must contain "regions"
-      - At least one activity must exist
     """
     try:
         new_cfg = await request.json()

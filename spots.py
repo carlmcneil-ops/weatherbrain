@@ -85,7 +85,7 @@ SPOTS = [
     {
         "id": "benmore_haldon",
         "name": "Lake Benmore – Haldon Arm",
-        "lat": -44.656,      # approx Haldon Arm area
+        "lat": -44.656,
         "lon": 170.338,
         "timezone": "Pacific/Auckland",
         "types": ["boating", "fishing", "camping"],
@@ -96,11 +96,10 @@ SPOTS = [
 
     {
         "id": "waikaia_piano_flat",
-        "name": "Waikaia – Piano Flat DOC",
-        "lat": -45.595,      # approx Piano Flat DOC campsite
-        "lon": 169.064,
+        "name": "Waikaia / Piano Flat",
+        "lat": -45.8167,
+        "lon": 168.7167,
         "timezone": "Pacific/Auckland",
-        "types": ["fishing", "camping"],
-        # no boat profile – this is camping/river time
+        "types": ["river", "camping"],
     },
 ]
